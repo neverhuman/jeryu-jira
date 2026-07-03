@@ -1,0 +1,68 @@
+name: ci
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+env:
+  JANKURAI_REPO: "https://github.com/neverhuman/jankurai.git"
+  JANKURAI_TAG: "v1.6.10-deadlang-precision"
+  JANKURAI_REV: "68bd6114373cf407a930011b76669af306cb0cb1"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  local:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Checkout
+        uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955
+      - name: Ensure pinned jankurai
+        run: bash ops/ci/ensure-jankurai.sh
+      - name: Doctor lane
+        run: bash scripts/ci-doctor.sh
+      - name: Fast lane
+        run: bash ops/ci/fast.sh
+      - name: Check lane
+        run: bash ops/ci/check.sh
+      - name: Property test lane
+        run: bash ops/ci/property_tests.sh
+      - name: Migration drift lane
+        run: bash ops/ci/migration_drift.sh
+      - name: Contract drift lane
+        run: bash ops/ci/contract_drift.sh
+      - name: Jankurai audit lane
+        run: |
+          jankurai audit . --full --mode advisory --policy agent/audit-policy.toml --json .jankurai/repo-score.json --md .jankurai/repo-score.md
+          bash ops/ci/score.sh
+      - name: Security lane
+        run: |
+          if command -v gitleaks >/dev/null 2>&1; then gitleaks detect --source . --redact --verbose; fi
+          if command -v cargo-audit >/dev/null 2>&1; then cargo audit --deny warnings; fi
+          if command -v actionlint >/dev/null 2>&1; then actionlint .github/workflows/*.yml; fi
+          printf '%s\n' "SBOM provenance evidence is emitted by ops/ci/security.sh"
+          bash ops/ci/security.sh
+      - name: Release readiness lane
+        run: bash ops/ci/release.sh
+      - name: Artifact support lane
+        run: bash ops/ci/artifact_support.sh
+      - name: Proof evidence lane
+        run: bash ops/ci/proof_evidence.sh
+      - name: Upload audit artifacts
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: ci-audit-artifacts
+          path: |
+            .jankurai/
+            target/jankurai/
+            target/security/
+            target/artifact-support/
+          if-no-files-found: ignore
