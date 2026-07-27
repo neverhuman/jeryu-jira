@@ -6,7 +6,7 @@ Required launch bar:
 
 - minimum score: `85`
 - hard findings allowed: `0`
-- required tool: `jankurai 1.6.10`
+- required tool: `jankurai 1.6.11`
 
 Audit artifacts:
 

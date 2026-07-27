@@ -21,10 +21,10 @@ require_tool python3
 
 if command -v jankurai >/dev/null 2>&1; then
   actual="$(jankurai --version 2>/dev/null || true)"
-  if [[ "$actual" == "jankurai 1.6.10" ]]; then
+  if [[ "$actual" == "jankurai 1.6.11" ]]; then
     printf 'doctor ok: jankurai=%s\n' "$actual"
   else
-    printf 'doctor wrong jankurai version: expected jankurai 1.6.10, got %s\n' "${actual:-unknown}" >&2
+    printf 'doctor wrong jankurai version: expected jankurai 1.6.11, got %s\n' "${actual:-unknown}" >&2
     missing=1
   fi
 else

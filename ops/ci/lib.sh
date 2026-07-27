@@ -2,7 +2,7 @@
 set -euo pipefail
 
 require_jankurai() {
-  local expected="jankurai 1.6.10"
+  local expected="jankurai 1.6.11"
   local actual
   actual="$(jankurai --version 2>/dev/null || true)"
   if [[ "$actual" != "$expected" ]]; then

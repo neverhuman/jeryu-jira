@@ -3,9 +3,10 @@ use serde::{Deserialize, Serialize};
 use ts_rs::{Config, ExportError, TS};
 use uuid::Uuid;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "snake_case")]
 pub enum WorkItemKind {
+    #[default]
     Task,
     Bug,
     Chore,
@@ -13,15 +14,10 @@ pub enum WorkItemKind {
     Ci,
 }
 
-impl Default for WorkItemKind {
-    fn default() -> Self {
-        Self::Task
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "snake_case")]
 pub enum WorkStatus {
+    #[default]
     Backlog,
     Ready,
     InProgress,
@@ -31,26 +27,15 @@ pub enum WorkStatus {
     Canceled,
 }
 
-impl Default for WorkStatus {
-    fn default() -> Self {
-        Self::Backlog
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "snake_case")]
 pub enum WorkPriority {
     P0,
     P1,
+    #[default]
     P2,
     P3,
     P4,
-}
-
-impl Default for WorkPriority {
-    fn default() -> Self {
-        Self::P2
-    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
