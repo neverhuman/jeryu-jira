@@ -30,10 +30,13 @@ git config core.hooksPath ops/git-hooks
 
 ## Repair Evidence
 
-Typed Work errors expose `purpose`, `reason`, `common_fixes`, `docs_url`, and
-`repair_hint` through `WorkError::repair_hint()`. Failed lanes should print the
-rerun command and preserve local artifacts under `target/jankurai/` when an
-artifact exists.
+Typed Work errors expose a stable `code` plus their purpose, reason, common
+fixes (`common_fixes` in JSON), `docs_url`, and `repair_hint` through the public,
+serializable `WorkRepairHint` returned by `WorkError::repair_hint()`. Machine
+receipts must serialize that static hint, never `WorkError::to_string()`, because
+storage and row-decoding errors can contain backend details. Failed lanes should
+print the rerun command and preserve local artifacts under `target/jankurai/`
+when an artifact exists.
 
 ## Launch Gates
 
