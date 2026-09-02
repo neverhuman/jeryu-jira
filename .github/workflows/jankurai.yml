@@ -23,15 +23,17 @@ jobs:
         run: bash ops/ci/ensure-jankurai.sh
       - name: Jankurai audit lane
         run: |
+          source ops/ci/lib.sh
+          require_jankurai
           jankurai audit . --full --mode advisory --policy agent/audit-policy.toml --json .jankurai/repo-score.json --md .jankurai/repo-score.md
           bash ops/ci/score.sh
       - name: Security scan evidence (gitleaks, cargo audit, actionlint)
         run: |
-          if command -v gitleaks >/dev/null 2>&1; then gitleaks detect --source . --redact --verbose; fi
-          if command -v cargo-audit >/dev/null 2>&1; then cargo audit --deny warnings; fi
-          if command -v actionlint >/dev/null 2>&1; then actionlint .github/workflows/*.yml; fi
-          printf '%s\n' "SBOM provenance evidence is emitted by ops/ci/security.sh"
-          bash ops/ci/security.sh
+          gitleaks detect --source . --redact --verbose
+          cargo audit --deny warnings
+          actionlint .github/workflows/*.yml
+          syft version -o json | jq -e '.version == "1.40.0"'
+          bash ops/ci/security-hosted.sh
       - name: Upload jankurai artifacts
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02

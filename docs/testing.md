@@ -9,9 +9,17 @@ Primary local lanes:
   idempotence.
 - `rtk just contract-drift`: generated TypeScript file set and bytes.
 - `rtk just score`: pinned Jankurai audit lane.
-- `rtk just security`: secret scan, dependency audit, workflow lint, and SBOM
-  provenance evidence when tools are installed.
+- `rtk just security`: required secret scan, dependency audit, workflow lint,
+  and lockfile provenance evidence through `tools/security-lane.sh`; absence
+  of any required tool fails closed.
 - `rtk just ci-local`: local parity wrapper for hosted lanes.
+
+On a clean committed topic derived from hosted `origin/main`, run
+`rtk bash ops/ci/proof_evidence.sh`. It executes the changed-surface proof
+plan, validates every receipt, runs the Jankurai security and Rust evidence
+lanes, and ratchets the candidate against an automatically removed no-local
+clone of protected main. It refuses a dirty tree, an empty change, another
+origin, or a score below 91.
 
 The pre-push hook at `ops/git-hooks/pre-push` runs
 `bash ops/ci/quality-gates.sh`. Enable it locally with:

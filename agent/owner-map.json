@@ -22,7 +22,8 @@
     "ops/git-hooks/": "ops",
     "repos.manifest.toml": "split",
     "rust-toolchain.toml": "workspace",
-    "scripts/": "ops"
+    "scripts/": "ops",
+    "tools/": "ops"
   },
   "workspace": "jeryu-jira"
 }

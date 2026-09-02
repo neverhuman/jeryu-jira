@@ -99,6 +99,11 @@
       "command": "just ci-local",
       "lane": "ci",
       "purpose": "verify local parity scripts execute hosted proof lanes"
+    },
+    "tools/": {
+      "command": "just security",
+      "lane": "security",
+      "purpose": "verify canonical strict security entrypoints"
     }
   },
   "workspace": "jeryu-jira"

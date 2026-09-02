@@ -20,12 +20,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955
       - name: Secret scan and dependency review
-        run: |
-          if command -v gitleaks >/dev/null 2>&1; then gitleaks detect --source . --redact --verbose; fi
-          if command -v cargo-audit >/dev/null 2>&1; then cargo audit --deny warnings; fi
-          if command -v actionlint >/dev/null 2>&1; then actionlint .github/workflows/*.yml; fi
-          printf '%s\n' "SBOM provenance evidence is emitted by ops/ci/security.sh"
-          bash ops/ci/security.sh
+        run: bash ops/ci/security-hosted.sh
       - name: Upload security evidence
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
@@ -34,4 +29,5 @@ jobs:
           path: |
             target/jankurai/security/evidence.json
             target/jankurai/security/Cargo.lock.sha256
+            target/security/sbom.cdx.json
           if-no-files-found: error
