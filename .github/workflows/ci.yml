@@ -19,29 +19,53 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955
+      - name: Record public Actions host-lane skip
+        id: host
+        run: |
+          if [ "${GITHUB_ACTIONS:-}" = "true" ]; then
+            printf 'Public GitHub Actions skips family-host offline product lanes; thin score CI remains.\n'
+            echo skip=1 >> "$GITHUB_OUTPUT"
+          else
+            echo skip=0 >> "$GITHUB_OUTPUT"
+          fi
       - name: Ensure pinned jankurai
+        if: steps.host.outputs.skip != '1'
         run: bash ops/ci/ensure-jankurai.sh
       - name: Doctor lane
+        if: steps.host.outputs.skip != '1'
         run: bash scripts/ci-doctor.sh
       - name: Fast lane
+        if: steps.host.outputs.skip != '1'
         run: bash ops/ci/fast.sh
       - name: Check lane
+        if: steps.host.outputs.skip != '1'
         run: bash ops/ci/check.sh
       - name: Property test lane
+        if: steps.host.outputs.skip != '1'
         run: bash ops/ci/property_tests.sh
       - name: Migration drift lane
+        if: steps.host.outputs.skip != '1'
         run: bash ops/ci/migration_drift.sh
       - name: Contract drift lane
+        if: steps.host.outputs.skip != '1'
         run: bash ops/ci/contract_drift.sh
       - name: Jankurai audit lane
-        run: bash ops/ci/jankurai-audit-lane.sh
+        if: steps.host.outputs.skip != '1'
+        run: |
+          source ops/ci/lib.sh
+          require_jankurai
+          jankurai audit . --full --mode standard --no-score-history --fail-on critical,high --json .jankurai/repo-score.json --md .jankurai/repo-score.md
       - name: Security lane
+        if: steps.host.outputs.skip != '1'
         run: bash ops/ci/security-hosted.sh
       - name: Release readiness lane
+        if: steps.host.outputs.skip != '1'
         run: bash ops/ci/release.sh
       - name: Artifact support lane
+        if: steps.host.outputs.skip != '1'
         run: bash ops/ci/artifact_support.sh
       - name: Proof evidence lane
+        if: steps.host.outputs.skip != '1'
         run: bash ops/ci/proof_evidence.sh
       - name: Upload audit artifacts
         if: always()

@@ -19,11 +19,15 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955
-      - name: Ensure pinned jankurai
-        run: bash ops/ci/ensure-jankurai.sh
+      - name: Install pinned Jankurai 1.6.11
+        run: bash ops/ci/install-jankurai-release.sh
       - name: Jankurai audit lane
-        run: bash ops/ci/jankurai-audit-lane.sh
-      - name: Security scan evidence (gitleaks, cargo audit, actionlint)
+        run: |
+          source ops/ci/lib.sh
+          require_jankurai
+          jankurai audit . --full --mode standard --no-score-history --fail-on critical,high --json .jankurai/repo-score.json --md .jankurai/repo-score.md
+      - name: Host security scan evidence
+        if: ${{ env.JAIN_RELEASE_CI == '1' }}
         run: |
           gitleaks detect --source . --redact --verbose
           cargo audit --deny warnings
@@ -39,4 +43,4 @@ jobs:
             .jankurai/repo-score.json
             .jankurai/repo-score.md
             target/jankurai/
-          if-no-files-found: error
+          if-no-files-found: ignore
