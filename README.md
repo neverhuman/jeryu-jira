@@ -2,6 +2,10 @@
 
 [![Release status: candidate; required check pending](docs/status-candidate.svg)](docs/release.md)
 
+<!-- jankurai-badge:start -->
+[![Jankurai score: 92/100](agent/jankurai-badge.svg)](.jankurai/repo-score.md)
+<!-- jankurai-badge:end -->
+
 Lean local-first Work Tracker source for Jeryu.
 
 This split owns the Rust Work model, SQLite persistence, and generated
