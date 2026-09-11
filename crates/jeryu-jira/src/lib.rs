@@ -10,5 +10,5 @@ pub use contracts::{
     WorkItemListResponse, WorkPrincipal, WorkPrincipalKind, WorkPriority, WorkPullRequestLink,
     WorkRepository, WorkStatus,
 };
-pub use error::{Result, WorkError};
+pub use error::{Result, WorkError, WorkRepairHint};
 pub use store::WorkStore;
