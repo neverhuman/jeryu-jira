@@ -34,11 +34,7 @@ jobs:
       - name: Contract drift lane
         run: bash ops/ci/contract_drift.sh
       - name: Jankurai audit lane
-        run: |
-          source ops/ci/lib.sh
-          require_jankurai
-          jankurai audit . --full --mode advisory --policy agent/audit-policy.toml --json .jankurai/repo-score.json --md .jankurai/repo-score.md
-          bash ops/ci/score.sh
+        run: bash ops/ci/jankurai-audit-lane.sh
       - name: Security lane
         run: bash ops/ci/security-hosted.sh
       - name: Release readiness lane
