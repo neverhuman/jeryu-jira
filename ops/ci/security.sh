@@ -7,7 +7,11 @@ checks_tsv="target/jankurai/security/checks.tsv"
 evidence_json="target/jankurai/security/evidence.json"
 : > "$checks_tsv"
 failed=0
-require_security_tools="${JERYU_REQUIRE_SECURITY_TOOLS:-0}"
+require_security_tools="${JERYU_REQUIRE_SECURITY_TOOLS:-1}"
+[[ "${require_security_tools}" == "0" || "${require_security_tools}" == "1" ]] || {
+  printf 'JERYU_REQUIRE_SECURITY_TOOLS must be 0 or 1\n' >&2
+  exit 1
+}
 
 record() {
   local name="$1"
@@ -72,6 +76,37 @@ if [[ -s Cargo.lock ]]; then
 else
   record "sbom-provenance" "fail" "lock-digest" "Cargo.lock is missing"
   failed=1
+fi
+
+if command -v syft >/dev/null 2>&1; then
+  syft_version="$(syft version -o json | jq -r '.version // empty')"
+  if [[ "${syft_version}" != "1.40.0" ]]; then
+    record "cyclonedx-sbom" "fail" "syft-1.40.0" \
+      "unexpected syft version: ${syft_version:-missing}"
+    failed=1
+  elif syft scan dir:. --source-name jeryu-jira \
+      --source-version "$(<VERSION)" --exclude './target/**' \
+      --exclude './.git/**' \
+      --output cyclonedx-json=target/security/sbom.cdx.json >/dev/null; then
+    if jq -e --arg version "$(<VERSION)" \
+      '.bomFormat == "CycloneDX" and
+       .metadata.component.name == "jeryu-jira" and
+       .metadata.component.version == $version and
+       (.components | type == "array")' \
+      target/security/sbom.cdx.json >/dev/null; then
+      record "cyclonedx-sbom" "pass" "syft-1.40.0" \
+        "CycloneDX source inventory emitted at target/security/sbom.cdx.json"
+    else
+      record "cyclonedx-sbom" "fail" "syft-1.40.0" \
+        "CycloneDX metadata does not bind the Jira source identity"
+      failed=1
+    fi
+  else
+    record "cyclonedx-sbom" "fail" "syft-1.40.0" "syft scan failed"
+    failed=1
+  fi
+else
+  mark_missing_tool "cyclonedx-sbom" "syft"
 fi
 
 if command -v cargo-audit >/dev/null 2>&1; then

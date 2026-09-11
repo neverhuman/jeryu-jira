@@ -3,6 +3,7 @@ set -euo pipefail
 
 source ops/ci/lib.sh
 
+bash ops/ci/test-governed-jankurai-path.sh
 cargo fmt --all --check
 cargo check --workspace --all-targets --jobs "${JERYU_CI_JOBS:-40}"
 cargo test --workspace --lib --bins --jobs "${JERYU_CI_JOBS:-40}"

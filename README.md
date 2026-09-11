@@ -1,10 +1,32 @@
 # jeryu-jira
 
+[![Release status: candidate; required check pending](docs/status-candidate.svg)](docs/release.md)
+
+<!-- jankurai-badge:start -->
+[![Jankurai score: 92/100](agent/jankurai-badge.svg)](.jankurai/repo-score.md)
+<!-- jankurai-badge:end -->
+
 Lean local-first Work Tracker source for Jeryu.
 
 This split owns the Rust Work model, SQLite persistence, and generated
 TypeScript contracts mirrored into `jeryu-web`. The product surface is named
 Work or Work Tracker; `jeryu-jira` remains the repository and crate name.
+
+## Quick Start
+
+From the existing canonical checkout, use the pinned Rust dependency graph and
+run the narrow checks before the complete local gate:
+
+```bash
+just doctor
+just fast
+just check
+just ci-local
+```
+
+`git.neverhuman.org` is the Git transport source of truth. This source remains
+a candidate until the exact commit has the protected `jeryu-jira/required`
+check, a qualifying independent approval, and a fast-forward merge.
 
 ## Docs
 

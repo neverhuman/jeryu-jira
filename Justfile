@@ -24,7 +24,7 @@ score:
   ./ops/ci/score.sh
 
 security:
-  ./ops/ci/security.sh
+  ./tools/security-lane.sh
 
 release-readiness:
   ./ops/ci/release.sh
