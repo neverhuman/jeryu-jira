@@ -40,3 +40,7 @@ ci-local:
 
 profile:
   printf '%s\n' "rust-workspace"
+
+# Entry point for the protected jeryu-jira/required check: the existing lane, unchanged.
+required:
+  bash ops/ci/pr-ci.sh
