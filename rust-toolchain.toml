@@ -1,2 +1,5 @@
 [toolchain]
-channel = "stable"
+# Pinned to the exact release CI's jankurai lane uses (ops/ci/lib.sh) and the
+# workspace `rust-version`. A floating "stable" resolves to whatever the host
+# shim ships (1.92 on xbabe0), which is below `rust-version` and fails the build.
+channel = "1.95.0"
