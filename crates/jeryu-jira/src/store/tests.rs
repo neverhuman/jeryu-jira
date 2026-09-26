@@ -1,4 +1,7 @@
-use uuid::Uuid;
+#[path = "../../tests/support/mod.rs"]
+mod support;
+
+use support::TestDatabase;
 
 use super::WorkStore;
 use crate::{
@@ -7,9 +10,22 @@ use crate::{
     WorkPriority, WorkPullRequestLink, WorkRepository, WorkStatus,
 };
 
-fn store() -> WorkStore {
-    let path = std::env::temp_dir().join(format!("jeryu-jira-{}.sqlite", Uuid::new_v4()));
-    WorkStore::open(path).expect("open store")
+std::thread_local! {
+    static AFTER_DETAIL_ITEM: std::cell::RefCell<Option<Box<dyn FnOnce()>>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+pub(super) fn after_detail_item_read() {
+    let callback = AFTER_DETAIL_ITEM.with(|hook| hook.borrow_mut().take());
+    if let Some(callback) = callback {
+        callback();
+    }
+}
+
+fn store() -> (TestDatabase, WorkStore) {
+    let database = TestDatabase::temporary();
+    let store = WorkStore::open(database.path()).expect("open store");
+    (database, store)
 }
 
 fn repo() -> WorkRepository {
@@ -23,8 +39,8 @@ fn repo() -> WorkRepository {
 
 #[test]
 fn create_patch_comment_and_reopen_persist() {
-    let temp = tempfile::tempdir().expect("temp dir");
-    let path = temp.path().join("work.sqlite");
+    let database = TestDatabase::temporary();
+    let path = database.path().to_path_buf();
     let store = WorkStore::open(&path).expect("open store");
     let item = store
         .create(CreateWorkItemRequest {
@@ -74,8 +90,81 @@ fn create_patch_comment_and_reopen_persist() {
 }
 
 #[test]
+fn detail_keeps_item_and_comments_in_one_snapshot_during_link_changes() {
+    let (_database, store) = store();
+    let connection = store.connect().expect("writer setup connection");
+    connection
+        .pragma_update(None, "journal_mode", "WAL")
+        .expect("allow writer commits while a reader holds its snapshot");
+    let item = store
+        .create(CreateWorkItemRequest {
+            repo: Some(repo()),
+            title: "Snapshot fixture".to_string(),
+            ..CreateWorkItemRequest::default()
+        })
+        .expect("create item");
+    store
+        .add_comment(
+            &item.key,
+            CreateWorkCommentRequest {
+                body: "Comment before the link".to_string(),
+                author: None,
+            },
+        )
+        .expect("initial comment");
+    let expected_link = WorkIssueLink {
+        owner: "another-owner".to_string(),
+        repo: "private-repository".to_string(),
+        number: 7,
+        url: None,
+    };
+    let writer = store.clone();
+    let key = item.key.clone();
+    let link = expected_link.clone();
+    AFTER_DETAIL_ITEM.with(|hook| {
+        *hook.borrow_mut() = Some(Box::new(move || {
+            writer
+                .link(
+                    &key,
+                    CreateWorkLinkRequest {
+                        issue: Some(link),
+                        pull_request: None,
+                    },
+                )
+                .expect("writer commits changed access binding");
+            writer
+                .add_comment(
+                    &key,
+                    CreateWorkCommentRequest {
+                        body: "Comment after the link".to_string(),
+                        author: None,
+                    },
+                )
+                .expect("writer commits later comment");
+        }));
+    });
+
+    let before = store.detail(&item.key).expect("coherent initial snapshot");
+    assert!(before.item.issue.is_none());
+    assert_eq!(before.comments.len(), 1);
+    assert_eq!(before.comments[0].body, "Comment before the link");
+
+    let after = store
+        .detail(&item.key)
+        .expect("coherent subsequent snapshot");
+    assert_eq!(after.item.issue, Some(expected_link));
+    assert_eq!(after.comments.len(), 2);
+    assert!(
+        after
+            .comments
+            .iter()
+            .any(|comment| comment.body == "Comment after the link")
+    );
+}
+
+#[test]
 fn issue_links_are_unique() {
-    let store = store();
+    let (_database, store) = store();
     let first = store
         .create(CreateWorkItemRequest {
             title: "First".to_string(),
@@ -117,7 +206,7 @@ fn issue_links_are_unique() {
 
 #[test]
 fn pull_request_links_are_deduplicated() {
-    let store = store();
+    let (_database, store) = store();
     let item = store
         .create(CreateWorkItemRequest {
             title: "Track PR".to_string(),
@@ -153,7 +242,7 @@ fn pull_request_links_are_deduplicated() {
 
 #[test]
 fn filter_matches_repo_status_assignee_label_and_search() {
-    let store = store();
+    let (_database, store) = store();
     let created = store
         .create(CreateWorkItemRequest {
             repo: Some(repo()),
@@ -184,7 +273,7 @@ fn filter_matches_repo_status_assignee_label_and_search() {
 
 #[test]
 fn validates_titles_comments_and_links() {
-    let store = store();
+    let (_database, store) = store();
     assert!(matches!(
         store.create(CreateWorkItemRequest {
             title: " ".to_string(),
@@ -213,3 +302,6 @@ fn validates_titles_comments_and_links() {
         Err(WorkError::Validation(_))
     ));
 }
+
+#[path = "create_tests.rs"]
+mod creation;
