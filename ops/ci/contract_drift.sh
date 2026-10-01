@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 source ops/ci/lib.sh
+# The toolchain the governed auditor was built with comes from its verified receipt.
+require_jankurai
 
 if [[ -e crates/jeryu-jira/bindings ]]; then
   printf 'contract drift failed: generated TypeScript must live only in contracts/generated\n' >&2
