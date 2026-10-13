@@ -11,6 +11,9 @@ Keep split `main` clean. The legacy monorepo is
 deprecated and archived as `jeryu/jeryu-monorepo`; this split family is the
 only source of truth. Land changes through PRs with green required checks.
 
+Do not edit `CHANGELOG.md` in a change: release notes are generated at release
+time from commit subjects and `Todo:` trailers.
+
 The user-facing product name is Work or Work Tracker. Do not present the
 feature as Jira in product UI or docs; `jeryu-jira` is only the repository and
 crate name.

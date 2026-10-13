@@ -1,8 +1,10 @@
 # Release
 
-`VERSION` is the version source for this split repository. `CHANGELOG.md`
-records user-visible changes. Releases land through PRs with green required
-checks and the Jankurai score at or above the policy floor.
+`VERSION` is the version source for this split repository. `CHANGELOG.md` is
+written when a release is cut: the release generates its notes from the commits
+since the last release, from their subjects and `Todo:` trailers. Changes do not
+add entries by hand. Releases land through PRs with green
+required checks and the Jankurai score at or above the policy floor.
 
 ## Release Command Policy
 
@@ -26,7 +28,8 @@ Release automation entrypoint: `bash ops/ci/release.sh`. It verifies `VERSION`,
 ## Release Structure
 
 - Version source: `VERSION`.
-- Changelog source: `CHANGELOG.md`.
+- Release notes target: `CHANGELOG.md`, generated at release time from the
+  commits since the previous release.
 - Release process doc: `docs/release.md`.
 - Rollback guidance: `docs/rollback.md`.
 - CI or script evidence: `target/jankurai/`, `target/security/`, and
