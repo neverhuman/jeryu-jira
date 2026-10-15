@@ -5,6 +5,7 @@ source ops/ci/lib.sh
 
 # Interface contracts: the generated mirror must match its reviewed lock (ADR 0015).
 sh ops/ci/contract_compat.sh
+sh ops/ci/contract_compat_test.sh
 
 
 cargo fmt --all --check

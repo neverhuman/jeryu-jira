@@ -13,12 +13,13 @@ set -eu
 
 consumer="jeryu-web"
 producer="jeryu-jira"
+holder="$producer"  # the repository holding the mirror and the lock
 root="${JERYU_CONTRACT_ROOT:-$(cd "$(dirname "$0")/../.." && pwd)}"
 dir="$root/contracts/generated"
 lock="$root/contracts/generated.lock"
 
 if [ ! -d "$dir" ]; then
-  printf 'contract compat failed: %s has no contracts/generated\n' "$producer" >&2
+  printf 'contract compat failed: %s has no contracts/generated\n' "$holder" >&2
   exit 1
 fi
 
@@ -35,7 +36,7 @@ if [ "${1:-}" = "--write" ]; then
 fi
 
 if [ ! -f "$lock" ]; then
-  printf 'contract compat failed: consumer %s has no contracts/generated.lock; run ops/ci/contract_compat.sh --write\n' "$consumer" >&2
+  printf 'contract compat failed: %s has no contracts/generated.lock; run ops/ci/contract_compat.sh --write\n' "$holder" >&2
   exit 1
 fi
 
