@@ -99,6 +99,11 @@
       "command": "just ci-local",
       "lane": "ci",
       "purpose": "verify local parity scripts execute hosted proof lanes"
+    },
+    "contracts/generated.lock": {
+      "command": "just check",
+      "lane": "check",
+      "purpose": "verify the generated contract mirror matches its lock (contract drift check)"
     }
   },
   "workspace": "jeryu-jira"
