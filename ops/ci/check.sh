@@ -2,6 +2,7 @@
 set -euo pipefail
 
 source ops/ci/lib.sh
+bash ops/ci/test-build-cache.sh
 
 # Interface contracts: the generated mirror must match its reviewed lock (ADR 0015).
 sh ops/ci/contract_compat.sh
