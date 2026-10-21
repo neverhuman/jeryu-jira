@@ -20,6 +20,11 @@
       "lane": "release",
       "purpose": "verify release notes stay routed through the score lane"
     },
+    "CONTRIBUTING.md": {
+      "command": "just check",
+      "lane": "check",
+      "purpose": "verify contributor and security guidance stays routed"
+    },
     "Cargo.lock": {
       "command": "just check",
       "lane": "check",
@@ -40,6 +45,11 @@
       "lane": "check",
       "purpose": "verify root navigation remains current"
     },
+    "SECURITY.md": {
+      "command": "just check",
+      "lane": "check",
+      "purpose": "verify contributor and security guidance stays routed"
+    },
     "VERSION": {
       "command": "just release-readiness && just score",
       "lane": "release",
@@ -59,6 +69,11 @@
       "command": "just check",
       "lane": "check",
       "purpose": "verify Work contract boundary guidance remains current"
+    },
+    "contracts/generated.lock": {
+      "command": "just check",
+      "lane": "check",
+      "purpose": "verify the generated contract mirror matches its lock (contract drift check)"
     },
     "contracts/generated/": {
       "command": "just check",
@@ -99,11 +114,6 @@
       "command": "just ci-local",
       "lane": "ci",
       "purpose": "verify local parity scripts execute hosted proof lanes"
-    },
-    "contracts/generated.lock": {
-      "command": "just check",
-      "lane": "check",
-      "purpose": "verify the generated contract mirror matches its lock (contract drift check)"
     }
   },
   "workspace": "jeryu-jira"

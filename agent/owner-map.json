@@ -5,14 +5,17 @@
     ".jankurai/": "audit",
     "AGENTS.md": "split",
     "CHANGELOG.md": "release",
+    "CONTRIBUTING.md": "docs",
     "Cargo.lock": "workspace",
     "Cargo.toml": "workspace",
     "Justfile": "workspace",
     "README.md": "docs",
+    "SECURITY.md": "docs",
     "VERSION": "release",
     "agent/": "agent",
     "agent/tool-adoption.toml": "agent",
     "contracts/AGENTS.md": "jeryu-jira",
+    "contracts/generated.lock": "jeryu-jira",
     "contracts/generated/": "jeryu-jira",
     "crates/jeryu-jira/": "jeryu-jira",
     "db/": "jeryu-jira",
@@ -22,8 +25,7 @@
     "ops/git-hooks/": "ops",
     "repos.manifest.toml": "split",
     "rust-toolchain.toml": "workspace",
-    "scripts/": "ops",
-    "contracts/generated.lock": "jeryu-jira"
+    "scripts/": "ops"
   },
   "workspace": "jeryu-jira"
 }
