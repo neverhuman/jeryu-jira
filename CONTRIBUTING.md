@@ -23,8 +23,13 @@ paths or credentials.
 Run the repository gate before opening a pull request:
 
 ```sh
-JERYU_SPLIT_FULL_CHECK=1 ./ops/ci/check.sh
+./ops/ci/pr-ci.sh
 ```
+
+This is the same gate pull requests must pass. It runs every lane in order
+(doctor, fast, check, property tests, migration drift, contract drift, score,
+security, release and artifact support) and stops at the first failure.
+`./ops/ci/check.sh` alone is only one of those lanes.
 
 ## Security
 
