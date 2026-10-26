@@ -52,3 +52,6 @@ fi
 ./ops/ci/security.sh
 ./ops/ci/release.sh
 ./ops/ci/artifact_support.sh
+
+echo "[pr-ci] jankurai evidence lane (ratchet against the forge's protected main)" >&2
+bash ops/ci/proof_evidence.sh
