@@ -5,19 +5,16 @@
 # forge serves for `main`, so the baseline a head is judged against stays out of
 # that head's reach.
 #
-# The baseline commit is the head's fork point on protected main (the merge-base
-# of the head and main's tip as the forge serves it), not main's tip itself. A
-# commit on protected main never changes, so the lane's verdict on a head is a
-# function of that head and main's immutable history: it does not flip from
-# pass to fail when main advances, and an open pull request is not forced to
-# rebase on every push to main. Main's later commits are still judged against:
-# the forge's merge queue replays a head onto main's current tip and runs the
-# required gate on that replay, where the fork point is the tip. (The queue
-# builds the replay in jeryu-deploy crates/jeryu-api/src/web/merge_queue/;
-# the gate runner gates that queue commit, refs/queue/<base>/<n>, as described
-# in jeryu-ci-runner ops/pr-gate/README.md.) A branch forked from an old main
-# is therefore compared with that old main here, and with current main only
-# when it is queued.
+# The baseline commit is protected main's tip as the forge serves it at gate
+# time, and the head has to contain it. Anything older (the head's fork point,
+# say) is a baseline the head picks by choosing where it branched, so a branch
+# forked from an old main could be ratcheted against old main's score and old
+# main's policy. A head behind the tip is refused with a request to rebase;
+# the forge's merge queue replays a head onto the tip anyway (jeryu-deploy
+# crates/jeryu-api/src/web/merge_queue/, gated as refs/queue/<base>/<n> per
+# jeryu-ci-runner ops/pr-gate/README.md), so the queue's run judges the same
+# baseline this lane does. jeryu-ci-runner ops/ci/proof_evidence.sh holds its
+# heads to the same rule.
 #
 # The lane needs the forge: it fetches and clones protected main over the
 # network. A baseline the head cannot write has to come from there, and it is
@@ -105,9 +102,10 @@ proof_baseline_fetch_main() {
   printf '%s\n' "$tip"
 }
 
-# The head's fork point on protected main: the newest commit of main's history
-# that the head contains. A head sharing no history with main is refused.
-proof_baseline_fork_point() {
+# Protected main's tip, once the head is shown to contain it: the baseline the
+# head is ratcheted against. A head sharing no history with main, or one behind
+# the tip, is refused. Prints the tip.
+proof_baseline_require_tip() {
   local tip="$1" head="$2" base
   if [[ ! "$tip" =~ ^[0-9a-f]{40}$ ]]; then
     printf 'protected-main tip is not a commit id: %s\n' "$tip" >&2
@@ -122,13 +120,18 @@ proof_baseline_fork_point() {
     printf 'the head under test shares no history with protected main %s\n' "$tip" >&2
     return 1
   fi
-  printf '%s\n' "$base"
+  if [[ "$base" != "$tip" ]]; then
+    printf 'the head under test is behind protected main %s (it forked at %s): rebase it onto main\n' \
+      "$tip" "$base" >&2
+    return 1
+  fi
+  printf '%s\n' "$tip"
 }
 
 # Clone protected main from the forge into DIR, require COMMIT to be in the
 # history the forge serves for main, and check COMMIT out there. --no-local and
-# --no-hardlinks so no object is shared with anything on this host. The fork
-# point is found in this checkout; this clone is the forge's independent word
+# --no-hardlinks so no object is shared with anything on this host. The tip is
+# found in this checkout; this clone is the forge's independent word
 # that it is a commit of protected main.
 proof_baseline_clone() {
   local url="$1" dir="$2" commit="$3" head

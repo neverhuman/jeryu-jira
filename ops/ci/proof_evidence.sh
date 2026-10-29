@@ -55,7 +55,7 @@ baseline_root="$baseline_parent/main"
 origin_url="$(proof_baseline_remote_url)"
 origin_shown="$(proof_baseline_redact_url "$origin_url")"
 main_tip="$(proof_baseline_fetch_main)"
-base_commit="$(proof_baseline_fork_point "$main_tip" "$head_commit")"
+base_commit="$(proof_baseline_require_tip "$main_tip" "$head_commit")"
 proof_baseline_clone "$origin_url" "$baseline_root" "$base_commit" >/dev/null
 # Protected main's policy judges both sides of the ratchet. A head that edits
 # agent/audit-policy.toml is ratcheted as its own tree with main's policy put
@@ -69,8 +69,8 @@ if [[ "$judged_commit" != "$head_commit" ]]; then
   printf '[proof] this head edits agent/audit-policy.toml: it is ratcheted under protected main %s'"'"'s policy as %s\n' \
     "$base_commit" "$judged_commit" >&2
 fi
-printf '[proof] baseline: protected main %s (fork point; main tip %s) from %s\n' \
-  "$base_commit" "$main_tip" "$origin_shown" >&2
+printf '[proof] baseline: protected main tip %s from %s\n' \
+  "$base_commit" "$origin_shown" >&2
 
 rm -rf "target/jankurai/proofbind" "target/jankurai/proofmark" "target/jankurai/rust" "target/jankurai/security" \
   "target/jankurai/copy-code.json" "target/jankurai/copy-code.md" "target/jankurai/accepted-baseline.json" \
@@ -261,7 +261,7 @@ jq -n \
   --arg security_wrapper_sha256 "$(sha256_of "target/jankurai/security-wrapper.json")" \
   '{schema_version:"jeryu.jira.proof-evidence/v1",git_head:$head,
     baseline_commit:$base,main_tip:$tip,baseline_origin:$origin,
-    baseline_source:"forge-clone-of-protected-main-fork-point",policy_sha256:$policy_sha256,judged_commit:$judged,
+    baseline_source:"forge-clone-of-protected-main-tip",policy_sha256:$policy_sha256,judged_commit:$judged,
     head_edits_policy:($judged != $head),
     dirty_worktree:false,changed_path_count:$changed_count,
     score:$score,baseline_score:$baseline_score,floor:$floor,
