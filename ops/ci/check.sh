@@ -12,6 +12,9 @@ sh ops/ci/contract_compat_test.sh
 cargo fmt --all --check
 cargo check --workspace --all-targets --jobs "${JERYU_CI_JOBS:-40}"
 cargo test --workspace --lib --bins --jobs "${JERYU_CI_JOBS:-40}"
+# The evidence lane's own guards (ops/ci/proof_baseline.sh) are tested by an
+# integration target that --lib --bins does not run.
+cargo test -p jeryu-jira --test proof_evidence_lane --jobs "${JERYU_CI_JOBS:-40}"
 
 for script in scripts/*.sh ops/ci/*.sh; do
   [[ -e "$script" ]] || continue

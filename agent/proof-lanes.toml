@@ -35,5 +35,5 @@ required = ["just artifact-support"]
 blocks_merge = false
 
 [lanes.proof-evidence]
-required = ["bash ops/ci/proof_evidence.sh"]
+required = ["just proof-evidence"]
 blocks_merge = true

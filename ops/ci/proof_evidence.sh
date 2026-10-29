@@ -13,18 +13,8 @@
 # wrote a "not applicable" artifact for them would be claiming evidence it never
 # produced.
 #
-# Jankurai credits a tool's adoption by finding its catalog command in CI text.
-# Every command it credits here is a command this lane really runs, with one
-# exception: the two strings below are catalog commands for runners a split
-# repository does not have. `cargo run -p jankurai` and the auditor's own
-# `language_bad_behavior` test binary both need the jankurai crate in this
-# workspace, which only jeryu-tool has. The detectors behind them are what
-# `jankurai audit --full` (run below, and gated below) evaluates on this tree,
-# so they are retained verbatim for detection and nothing is written to stand in
-# for their output:
-#
-#   cargo run -p jankurai -- copy-code . --json target/jankurai/copy-code.json --md target/jankurai/copy-code.md
-#   cargo test -p jankurai --test language_bad_behavior
+# Every Jankurai command named in this file is a command this lane runs. No
+# command is written here only to be found by the auditor's adoption detector.
 set -euo pipefail
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
@@ -61,27 +51,43 @@ trap 'on_signal 130' INT
 trap 'on_signal 143' TERM
 
 baseline_root="$baseline_parent/main"
+# The origin is checked before anything is fetched from it.
 origin_url="$(proof_baseline_remote_url)"
-base_commit="$(proof_baseline_clone "$origin_url" "$baseline_root")"
-proof_baseline_require_descendant "$base_commit" "$head_commit"
-proof_baseline_require_policy_identity agent/audit-policy.toml \
-  "$baseline_root/agent/audit-policy.toml"
-printf '[proof] baseline: protected main %s from %s\n' "$base_commit" "$origin_url" >&2
+origin_shown="$(proof_baseline_redact_url "$origin_url")"
+main_tip="$(proof_baseline_fetch_main)"
+base_commit="$(proof_baseline_fork_point "$main_tip" "$head_commit")"
+proof_baseline_clone "$origin_url" "$baseline_root" "$base_commit" >/dev/null
+# Protected main's policy judges both sides of the ratchet. A head that edits
+# agent/audit-policy.toml is ratcheted as its own tree with main's policy put
+# back (ops/ci/proof_baseline.sh, proof_baseline_judged_commit); its edit takes
+# effect once it lands.
+policy="$(proof_baseline_policy "$baseline_root")"
+judged_commit="$(proof_baseline_judged_commit "$head_commit" "$policy" "$baseline_parent/judged")"
+judged_args=(.)
+if [[ "$judged_commit" != "$head_commit" ]]; then
+  judged_args=("$baseline_parent/judged" --read-only)
+  printf '[proof] this head edits agent/audit-policy.toml: it is ratcheted under protected main %s'"'"'s policy as %s\n' \
+    "$base_commit" "$judged_commit" >&2
+fi
+printf '[proof] baseline: protected main %s (fork point; main tip %s) from %s\n' \
+  "$base_commit" "$main_tip" "$origin_shown" >&2
 
 rm -rf "target/jankurai/proofbind" "target/jankurai/proofmark" "target/jankurai/rust" "target/jankurai/security" \
   "target/jankurai/copy-code.json" "target/jankurai/copy-code.md" "target/jankurai/accepted-baseline.json" \
   "target/jankurai/accepted-baseline.md" "target/jankurai/repo-score.json" "target/jankurai/repo-score.md" \
   "target/jankurai/repair-queue.jsonl" "target/jankurai/migration-report.json" "target/jankurai/migration-report.md" \
   "target/jankurai/baseline-migration-report.json" "target/jankurai/baseline-migration-report.md" \
-  "target/jankurai/proof-evidence-summary.json"
+  "target/jankurai/proof-evidence-summary.json" "target/jankurai/security-wrapper.json" \
+  "target/jankurai/head-policy-score.json" "target/jankurai/head-policy-score.md"
 mkdir -p "target/jankurai/proofbind" "target/jankurai/proofmark" "target/jankurai/rust" "target/jankurai/security"
 
 # The change set this head is, by git's own reckoning: each tool that claims to
 # have looked at the change has to have looked at exactly this.
-mapfile -d '' -t changed_paths < <(
-  git diff --no-ext-diff --name-only -z --diff-filter=ACMRT \
-    "${base_commit}...${head_commit}" | LC_ALL=C sort -zu
-)
+# The diff is written to a file first, so a failing git diff stops the lane under
+# set -e instead of leaving an empty change set behind a process substitution.
+git diff --no-ext-diff --name-only -z --diff-filter=ACMRT \
+  "${base_commit}...${head_commit}" >"$baseline_parent/changed-paths"
+mapfile -d '' -t changed_paths < <(LC_ALL=C sort -zu "$baseline_parent/changed-paths")
 expected_changed="$(
   printf '%s\0' "${changed_paths[@]:-}" |
     jq -Rs 'split("\u0000") | map(select(length > 0)) | sort | unique'
@@ -89,8 +95,8 @@ expected_changed="$(
 
 # The audit of protected main. --read-only keeps the audit out of the clone and
 # writes the report here, under this run's own output directory.
-jankurai audit "$baseline_root" --mode advisory --full --no-score-history --read-only \
-  --policy agent/audit-policy.toml \
+jankurai audit "$baseline_root" --mode advisory --full --no-score-history \
+  --policy "$policy" \
   --json "target/jankurai/accepted-baseline.json" --md "target/jankurai/accepted-baseline.md"
 jq -e --arg base "$base_commit" '
   .schema_version == "1.9.0" and .git.head == $base and .git.dirty_worktree == false and
@@ -155,15 +161,29 @@ jq -e '
     (.file_count | type == "number" and . > 0))
 ' "target/jankurai/rust/witness-graph.json" >/dev/null
 
-# This repository's supply-chain entrypoint is ops/ci/security.sh.
-jankurai security run . --script ops/ci/security.sh --out target/jankurai/security/evidence.json --strict --profile ci
+# This repository's supply-chain entrypoint is ops/ci/security.sh, which writes
+# its own evidence to target/jankurai/security/evidence.json; the wrapper's
+# receipt goes to a path of its own so neither overwrites the other. The lane
+# requires every scanner: with JERYU_REQUIRE_SECURITY_TOOLS=1 a missing
+# gitleaks, cargo-audit or actionlint is a failed check, not a "not_run" one,
+# and every check the script recorded is read below.
+JERYU_REQUIRE_SECURITY_TOOLS=1 jankurai security run . --script ops/ci/security.sh \
+  --out target/jankurai/security-wrapper.json --strict --profile ci
+jq -e '
+  .schema_version == "jeryu.split.security/v1" and (.checks | type == "array") and
+  ([.checks[] | select(.status != "pass")] | length) == 0 and
+  ([.checks[].name] | contains(["env-file", "cargo-metadata", "sbom-provenance",
+    "dependency-audit", "secret-scan", "actionlint"]))
+' "target/jankurai/security/evidence.json" >/dev/null ||
+  { printf 'the security lane did not pass every check, scanners included: %s\n' \
+      "target/jankurai/security/evidence.json" >&2; exit 1; }
 jq -e --arg head "$head_commit" '
   .git_head == $head and .lane == "security" and
   .wrapper.path == "ops/ci/security.sh" and .wrapper.strict == true and
   .exit_code == 0 and
   ([.commands[] | select(.status != "ran" or .exit_code != 0)] | length) == 0 and
   ([.commands[] | select(.status == "ran" and .exit_code == 0)] | length) >= 1
-' "target/jankurai/security/evidence.json" >/dev/null
+' "target/jankurai/security-wrapper.json" >/dev/null
 
 # Migration analysis is a result, so it is read: the report has to be complete,
 # and this head may not carry more database-migration liability than protected
@@ -183,10 +203,10 @@ jq -e --argjson baseline "$baseline_liability" '
   { printf 'migration analysis failed its gate (liability must stay at or below protected main %s)\n' \
       "$baseline_liability" >&2; exit 1; }
 
-jankurai audit . --mode ratchet --baseline target/jankurai/accepted-baseline.json --json target/jankurai/repo-score.json --md target/jankurai/repo-score.md \
-  --policy agent/audit-policy.toml --fail-under "$floor" --full --no-score-history \
+jankurai audit "${judged_args[@]}" --mode ratchet --baseline target/jankurai/accepted-baseline.json --json target/jankurai/repo-score.json --md target/jankurai/repo-score.md \
+  --policy "${judged_args[0]}/agent/audit-policy.toml" --fail-under "$floor" --full --no-score-history \
   --repair-queue-jsonl target/jankurai/repair-queue.jsonl
-jq -e --arg head "$head_commit" --argjson floor "$floor" \
+jq -e --arg head "$judged_commit" --argjson floor "$floor" \
   --argjson baseline_score "$baseline_score" '
   .schema_version == "1.9.0" and .git.head == $head and .git.dirty_worktree == false and
   .score >= $floor and .decision.minimum_score == $floor and
@@ -200,6 +220,18 @@ jq -e --arg head "$head_commit" --argjson floor "$floor" \
   (.decision.ratchet.new_hard_findings | length) == 0
 ' "target/jankurai/repo-score.json" >/dev/null
 
+# A head that edits the policy must also pass under its own: no caps, no hard
+# findings, and the forge's floor, which a policy cannot lower.
+if [[ "$judged_commit" != "$head_commit" ]]; then
+  jankurai audit . --mode advisory --policy ./agent/audit-policy.toml --full --no-score-history \
+    --json target/jankurai/head-policy-score.json --md target/jankurai/head-policy-score.md
+  jq -e --arg head "$head_commit" --argjson host_floor "$host_floor" '
+    .schema_version == "1.9.0" and .git.head == $head and .git.dirty_worktree == false and
+    .score >= $host_floor and (.caps_applied | length) == 0 and .decision.hard_findings == 0
+  ' "target/jankurai/head-policy-score.json" >/dev/null ||
+    { printf 'this head does not pass under its own edited policy\n' >&2; exit 1; }
+fi
+
 # Nothing above may have moved the head, the tracked tree or the forge this
 # baseline came from.
 if [[ "$(git rev-parse --verify 'HEAD^{commit}')" != "$head_commit" ||
@@ -211,7 +243,9 @@ fi
 
 sha256_of() { sha256sum <"$1" | cut -d' ' -f1; }
 jq -n \
-  --arg head "$head_commit" --arg base "$base_commit" --arg origin "$origin_url" \
+  --arg head "$head_commit" --arg base "$base_commit" --arg tip "$main_tip" \
+  --arg judged "$judged_commit" \
+  --arg origin "$origin_shown" --arg policy_sha256 "$(sha256sum <"$policy" | cut -d' ' -f1)" \
   --argjson changed_count "${#changed_paths[@]}" \
   --argjson floor "$floor" --argjson baseline_score "$baseline_score" \
   --argjson score "$(jq -er '.score' "target/jankurai/repo-score.json")" \
@@ -222,14 +256,17 @@ jq -n \
   --arg baseline_sha256 "$(sha256_of "target/jankurai/accepted-baseline.json")" \
   --arg score_sha256 "$(sha256_of "target/jankurai/repo-score.json")" \
   --arg security_sha256 "$(sha256_of "target/jankurai/security/evidence.json")" \
+  --arg security_wrapper_sha256 "$(sha256_of "target/jankurai/security-wrapper.json")" \
   '{schema_version:"jeryu.jira.proof-evidence/v1",git_head:$head,
-    baseline_commit:$base,baseline_origin:$origin,baseline_source:"forge-clone-of-protected-main",
+    baseline_commit:$base,main_tip:$tip,baseline_origin:$origin,
+    baseline_source:"forge-clone-of-protected-main-fork-point",policy_sha256:$policy_sha256,judged_commit:$judged,
+    head_edits_policy:($judged != $head),
     dirty_worktree:false,changed_path_count:$changed_count,
     score:$score,baseline_score:$baseline_score,floor:$floor,
     changed_surface_count:$proofbind_review,proofmark_review_obligations:$proofmark_review,
     migration_liability_score:$liability,baseline_migration_liability_score:$baseline_liability,
     baseline_sha256:$baseline_sha256,repo_score_sha256:$score_sha256,
-    security_sha256:$security_sha256,synthetic_fallbacks:0,conclusion:"success"}' \
+    security_sha256:$security_sha256,security_wrapper_sha256:$security_wrapper_sha256,synthetic_fallbacks:0,conclusion:"success"}' \
   > "target/jankurai/proof-evidence-summary.json"
 
 printf 'proof evidence ok: head=%s base=%s paths=%s score=%s baseline=%s floor=%s\n' \

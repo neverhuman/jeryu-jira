@@ -1,13 +1,18 @@
 //! The evidence lane's own guards: where its ratchet baseline may come from,
 //! and that it still refuses what it is meant to refuse.
 //!
-//! `ops/ci/proof_baseline.sh` is sourced and called here with a `git` stub on
-//! PATH, so each refusal is executed — no forge, no network and no auditor are
+//! `ops/ci/proof_baseline.sh` is sourced and its guards are called here. The
+//! history and clone guards run against real throwaway git repositories served
+//! over `file://` (a depth-1 checkout, a forked branch, unrelated history), so
+//! what real git does with `--unshallow` and ancestry is what is tested; the
+//! origin guard uses a `git` stub. No forge, no network and no auditor are
 //! needed. The lane itself (`ops/ci/proof_evidence.sh`) runs every Jankurai
 //! tool for real and cannot be run from a unit test; what is checked of it here
-//! is the wiring a reader cannot see from one file: that it is in the required
-//! gate, that it takes no baseline out of the tree under test, and that no tool
-//! result is ignored or stood in for.
+//! is wiring a reader cannot see from one file. Those wiring checks are line
+//! tripwires over the script, not a shell parser: they catch the named
+//! regressions, not every way of writing them.
+//!
+//! This target is run by `ops/ci/check.sh`.
 
 use std::fs;
 use std::os::unix::fs::PermissionsExt;
@@ -38,6 +43,19 @@ fn git_stub(dir: &Path, body: &str) -> PathBuf {
     bin
 }
 
+/// A git environment that reads no user or system configuration.
+fn isolated(cmd: &mut Command) -> &mut Command {
+    cmd.env("GIT_CONFIG_GLOBAL", "/dev/null")
+        .env("GIT_CONFIG_NOSYSTEM", "1")
+        .env("GIT_AUTHOR_NAME", "proof test")
+        .env("GIT_AUTHOR_EMAIL", "proof@example.invalid")
+        .env("GIT_COMMITTER_NAME", "proof test")
+        .env("GIT_COMMITTER_EMAIL", "proof@example.invalid")
+        .env_remove("GIT_DIR")
+        .env_remove("GIT_WORK_TREE")
+        .env_remove("GIT_INDEX_FILE")
+}
+
 /// Source the baseline guards and run `snippet` with `stub_bin` first on PATH.
 fn run_guard(stub_bin: Option<&Path>, snippet: &str) -> Output {
     let base_path = std::env::var("PATH").unwrap_or_else(|_| "/usr/bin:/bin".to_string());
@@ -45,27 +63,124 @@ fn run_guard(stub_bin: Option<&Path>, snippet: &str) -> Output {
         Some(bin) => format!("{}:{base_path}", bin.display()),
         None => base_path,
     };
-    Command::new("bash")
+    let root = repo_root();
+    isolated(&mut Command::new("bash"))
         .arg("-c")
-        .arg(format!("source ops/ci/proof_baseline.sh\n{snippet}"))
-        .current_dir(repo_root())
+        .arg(format!(
+            "source {}\n{snippet}",
+            path_arg(&root.join("ops/ci/proof_baseline.sh"))
+        ))
+        .current_dir(&root)
         .env("PATH", path)
         .output()
         .expect("run guard")
+}
+
+fn git(dir: &Path, args: &[&str]) -> String {
+    let out = isolated(&mut Command::new("git"))
+        .arg("-C")
+        .arg(dir)
+        .args(args)
+        .output()
+        .expect("run git");
+    assert!(
+        out.status.success(),
+        "git {args:?}: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    String::from_utf8_lossy(&out.stdout).trim().to_string()
+}
+
+fn commit(dir: &Path, name: &str) -> String {
+    fs::write(dir.join(name), name).expect("write file");
+    git(dir, &["add", name]);
+    git(dir, &["commit", "--quiet", "--no-gpg-sign", "-m", name]);
+    git(dir, &["rev-parse", "HEAD"])
 }
 
 fn path_arg(path: &Path) -> String {
     format!("{:?}", path.display().to_string())
 }
 
+fn stderr(out: &Output) -> String {
+    String::from_utf8_lossy(&out.stderr).to_string()
+}
+
 fn lane_source() -> String {
     fs::read_to_string(repo_root().join("ops/ci/proof_evidence.sh")).expect("lane source")
 }
 
-const MAIN_COMMIT: &str = "1111111111111111111111111111111111111111";
+/// A forge stand-in: a bare repository whose `main` has two commits, with a
+/// three-commit `topic` branch forked from the first and a `lonely` branch with
+/// no shared history. Returns (forge dir, fork point, main tip, topic tip).
+struct Forge {
+    _dir: tempfile::TempDir,
+    bare: PathBuf,
+    fork: String,
+    main_tip: String,
+    topic_tip: String,
+}
+
+impl Forge {
+    fn new() -> Self {
+        let dir = temp_dir();
+        let work = dir.path().join("work");
+        let bare = dir.path().join("forge.git");
+        fs::create_dir_all(&work).expect("work dir");
+        git(&work, &["init", "--quiet", "--initial-branch=main"]);
+        fs::create_dir_all(work.join("agent")).expect("agent dir");
+        fs::write(work.join("agent/audit-policy.toml"), "minimum_score = 85\n").expect("policy");
+        git(&work, &["add", "agent/audit-policy.toml"]);
+        let fork = commit(&work, "m1");
+        git(&work, &["switch", "--quiet", "-c", "topic"]);
+        commit(&work, "t1");
+        commit(&work, "t2");
+        let topic_tip = commit(&work, "t3");
+        git(&work, &["switch", "--quiet", "main"]);
+        let main_tip = commit(&work, "m2");
+        git(&work, &["switch", "--quiet", "--orphan", "lonely"]);
+        commit(&work, "l1");
+        git(
+            dir.path(),
+            &["clone", "--quiet", "--bare", "work", "forge.git"],
+        );
+        Forge {
+            _dir: dir,
+            bare,
+            fork,
+            main_tip,
+            topic_tip,
+        }
+    }
+
+    fn url(&self) -> String {
+        format!("file://{}", self.bare.display())
+    }
+
+    /// A depth-1 checkout of `branch`, as a CI checkout of a pull request is.
+    fn shallow_checkout(&self, into: &Path, branch: &str) -> PathBuf {
+        let dir = into.join(format!("checkout-{branch}"));
+        let parent = into.to_path_buf();
+        git(
+            &parent,
+            &[
+                "clone",
+                "--quiet",
+                "--depth",
+                "1",
+                "--no-single-branch",
+                "--branch",
+                branch,
+                &self.url(),
+                dir.to_str().expect("utf-8 path"),
+            ],
+        );
+        dir
+    }
+}
 
 #[test]
-fn baseline_origin_must_be_a_remote_the_head_cannot_write() {
+fn baseline_origin_must_be_an_authenticated_remote_the_head_cannot_write() {
     let dir = temp_dir();
     let remote = git_stub(
         dir.path(),
@@ -74,201 +189,299 @@ fn baseline_origin_must_be_a_remote_the_head_cannot_write() {
 fi
 exit 1"#,
     );
-
-    let out = run_guard(
-        Some(&remote),
-        "STUB_ORIGIN=https://forge.example/jeryu/jeryu-jira.git proof_baseline_remote_url",
-    );
-    assert!(out.status.success(), "a remote URL is the baseline source");
-    assert_eq!(
-        String::from_utf8_lossy(&out.stdout).trim(),
-        "https://forge.example/jeryu/jeryu-jira.git"
-    );
-
-    for local in ["/home/someone/jeryu-jira", "../jeryu-jira", ""] {
+    for good in [
+        "https://forge.example/jeryu/jeryu-jira.git",
+        "ssh://git@forge.example/jeryu/jeryu-jira.git",
+        "git@forge.example:jeryu/jeryu-jira.git",
+    ] {
         let out = run_guard(
             Some(&remote),
-            &format!("STUB_ORIGIN={local:?} proof_baseline_remote_url"),
+            &format!("STUB_ORIGIN={good:?} proof_baseline_remote_url"),
+        );
+        assert!(out.status.success(), "{good} is a baseline source");
+        assert_eq!(String::from_utf8_lossy(&out.stdout).trim(), good);
+    }
+    for bad in [
+        "/home/someone/jeryu-jira",
+        "../jeryu-jira",
+        "",
+        "http://forge.example/jeryu/jeryu-jira.git",
+        "git://forge.example/jeryu/jeryu-jira.git",
+        "file:///srv/jeryu-jira.git",
+    ] {
+        let out = run_guard(
+            Some(&remote),
+            &format!("STUB_ORIGIN={bad:?} proof_baseline_remote_url"),
         );
         assert!(
             !out.status.success(),
-            "a local origin ({local}) must not be trusted as the forge"
+            "origin {bad:?} must not be trusted as the forge"
         );
     }
 }
 
 #[test]
-fn a_shallow_checkout_is_deepened_before_ancestry_is_asked() {
+fn credentials_in_the_origin_url_never_reach_a_log_or_receipt() {
+    for (url, shown) in [
+        (
+            "https://ci:s3cr3t-pw@forge.example/jeryu/jeryu-jira.git",
+            "https://forge.example/jeryu/jeryu-jira.git",
+        ),
+        (
+            "https://x-access@forge.example/r.git",
+            "https://forge.example/r.git",
+        ),
+        ("https://forge.example/r.git", "https://forge.example/r.git"),
+        ("git@forge.example:r.git", "git@forge.example:r.git"),
+    ] {
+        let out = run_guard(None, &format!("proof_baseline_redact_url {url:?}"));
+        assert!(out.status.success());
+        assert_eq!(String::from_utf8_lossy(&out.stdout).trim(), shown);
+    }
     let dir = temp_dir();
-    // A depth-1 checkout: the baseline commit is absent until a fetch brings
-    // it, and `--unshallow` is the fetch that makes ancestry answerable.
-    let stub = git_stub(
+    let remote = git_stub(
         dir.path(),
-        r#"log="$STUB_LOG"
-printf '%s\n' "$*" >>"$log"
-case "$*" in
-  "rev-parse --is-shallow-repository") [[ -e "$log.deep" ]] && printf 'false\n' || printf 'true\n'; exit 0 ;;
-  "fetch --quiet --no-tags --unshallow origin main") : >"$log.deep"; exit 0 ;;
-  cat-file*) [[ -e "$log.deep" ]] && exit 0 || exit 1 ;;
-  "merge-base --is-ancestor"*) exit 0 ;;
-esac
+        r#"[[ "$1 $2 $3" == "remote get-url origin" ]] && { printf 'http://ci:s3cr3t-pw@forge.example/r.git\n'; exit 0; }
 exit 1"#,
     );
-    let log = dir.path().join("calls");
-    let out = run_guard(
-        Some(&stub),
-        &format!(
-            "STUB_LOG={} proof_baseline_require_descendant {MAIN_COMMIT} HEAD",
-            path_arg(&log)
-        ),
-    );
+    let refused = run_guard(Some(&remote), "proof_baseline_remote_url");
+    assert!(!refused.status.success());
     assert!(
-        out.status.success(),
-        "deepening then asking must pass: {}",
-        String::from_utf8_lossy(&out.stderr)
+        !stderr(&refused).contains("s3cr3t-pw"),
+        "a refusal message must not print the credential: {}",
+        stderr(&refused)
     );
-    let calls = fs::read_to_string(&log).expect("stub log");
-    let unshallow = calls
-        .lines()
-        .position(|l| l.contains("--unshallow"))
-        .expect("the guard deepens the checkout");
-    let ancestry = calls
-        .lines()
-        .position(|l| l.starts_with("merge-base"))
-        .expect("the guard asks about ancestry");
+
+    let lane = lane_source();
     assert!(
-        unshallow < ancestry,
-        "ancestry must be asked only after the history is here: {calls}"
+        lane.contains("--arg origin \"$origin_shown\""),
+        "the receipt records the redacted origin"
     );
+    for line in lane.lines() {
+        if line.contains("printf") && line.contains("origin_url") {
+            panic!("the lane prints the raw origin URL: {line}");
+        }
+    }
 }
 
 #[test]
-fn a_head_that_does_not_descend_from_protected_main_is_refused() {
-    let dir = temp_dir();
-    let stub = git_stub(
-        dir.path(),
-        r#"case "$*" in
-  "rev-parse --is-shallow-repository") printf 'false\n'; exit 0 ;;
-  cat-file*) exit 0 ;;
-  "merge-base --is-ancestor"*) exit 1 ;;
-esac
-exit 1"#,
+fn a_depth_one_pull_request_checkout_is_deepened_with_the_heads_own_history() {
+    let forge = Forge::new();
+    let work = temp_dir();
+    let checkout = forge.shallow_checkout(work.path(), "topic");
+    assert_eq!(
+        git(&checkout, &["rev-parse", "--is-shallow-repository"]),
+        "true"
     );
     let out = run_guard(
-        Some(&stub),
-        &format!("proof_baseline_require_descendant {MAIN_COMMIT} HEAD"),
+        None,
+        &format!(
+            "cd {} && tip=\"$(proof_baseline_fetch_main)\" && printf '%s\\n' \"$tip\" && proof_baseline_fork_point \"$tip\" HEAD",
+            path_arg(&checkout)
+        ),
     );
-    assert!(!out.status.success(), "a stale head must fail the lane");
+    assert!(out.status.success(), "real git deepening: {}", stderr(&out));
+    let printed = String::from_utf8_lossy(&out.stdout);
+    let lines: Vec<&str> = printed.lines().collect();
+    assert_eq!(lines, vec![forge.main_tip.as_str(), forge.fork.as_str()]);
+    assert_eq!(
+        git(&checkout, &["rev-parse", "--is-shallow-repository"]),
+        "false"
+    );
+    assert_eq!(git(&checkout, &["rev-parse", "HEAD"]), forge.topic_tip);
+}
+
+#[test]
+fn the_baseline_is_the_fork_point_so_main_advancing_does_not_change_the_verdict() {
+    let forge = Forge::new();
+    let work = temp_dir();
+    let checkout = forge.shallow_checkout(work.path(), "topic");
+    let out = run_guard(
+        None,
+        &format!(
+            "cd {} && tip=\"$(proof_baseline_fetch_main)\" && proof_baseline_fork_point \"$tip\" HEAD",
+            path_arg(&checkout)
+        ),
+    );
+    assert!(out.status.success(), "{}", stderr(&out));
+    assert_ne!(forge.fork, forge.main_tip, "main has moved past the fork");
+    assert_eq!(String::from_utf8_lossy(&out.stdout).trim(), forge.fork);
+}
+
+#[test]
+fn a_head_sharing_no_history_with_protected_main_is_refused() {
+    let forge = Forge::new();
+    let work = temp_dir();
+    let checkout = forge.shallow_checkout(work.path(), "lonely");
+    let out = run_guard(
+        None,
+        &format!(
+            "cd {} && tip=\"$(proof_baseline_fetch_main)\" && proof_baseline_fork_point \"$tip\" HEAD",
+            path_arg(&checkout)
+        ),
+    );
     assert!(
-        String::from_utf8_lossy(&out.stderr).contains("does not descend from protected main"),
-        "the refusal says what to do: {}",
-        String::from_utf8_lossy(&out.stderr)
+        !out.status.success(),
+        "unrelated history must fail the lane"
     );
+    assert!(stderr(&out).contains("shares no history with protected main"));
 
     // A commit id is all the guard will pass to git: no ref name, no option.
     for bad in ["--upload-pack=touch /tmp/x", "origin/main", "1111111"] {
-        let out = run_guard(
-            Some(&stub),
-            &format!("proof_baseline_require_descendant {bad:?} HEAD"),
-        );
+        let out = run_guard(None, &format!("proof_baseline_fork_point {bad:?} HEAD"));
         assert!(!out.status.success(), "{bad} is not a commit id");
     }
 }
 
 #[test]
-fn a_baseline_commit_that_never_arrives_fails_closed() {
-    let dir = temp_dir();
-    let stub = git_stub(
-        dir.path(),
-        r#"case "$*" in
-  "rev-parse --is-shallow-repository") printf 'false\n'; exit 0 ;;
-  cat-file*) exit 1 ;;
-  fetch*) exit 0 ;;
-esac
-exit 1"#,
-    );
-    let out = run_guard(
-        Some(&stub),
-        &format!("proof_baseline_require_descendant {MAIN_COMMIT} HEAD"),
-    );
-    assert!(
-        !out.status.success(),
-        "a fetch that brought nothing must not be taken for ancestry"
-    );
-    assert!(String::from_utf8_lossy(&out.stderr).contains("is not in this checkout"));
-}
-
-#[test]
-fn an_unclean_or_commitless_protected_clone_is_refused() {
-    let dir = temp_dir();
-    let stub = git_stub(
-        dir.path(),
-        r#"case "$1" in
-  clone) mkdir -p "${@: -1}"; exit 0 ;;
-esac
-case "$*" in
-  *"rev-parse --verify HEAD^{commit}") printf '%s\n' "$STUB_HEAD"; exit 0 ;;
-  *"status --porcelain=v1 --untracked-files=all") printf '%s' "$STUB_DIRTY"; exit 0 ;;
-esac
-exit 1"#,
-    );
-    let clone = |head: &str, dirty: &str, name: &str| {
-        run_guard(
-            Some(&stub),
-            &format!(
-                "STUB_HEAD={head} STUB_DIRTY={dirty:?} proof_baseline_clone https://forge.example/r.git {}",
-                path_arg(&dir.path().join(name))
-            ),
-        )
-    };
-    let ok = clone(MAIN_COMMIT, "", "a");
-    assert!(ok.status.success(), "a clean clone is the baseline");
-    assert_eq!(String::from_utf8_lossy(&ok.stdout).trim(), MAIN_COMMIT);
-
-    let dirty = clone(MAIN_COMMIT, " M agent/audit-policy.toml", "b");
-    assert!(
-        !dirty.status.success(),
-        "a dirty clone is not protected main"
-    );
-
-    let short = clone("1111111", "", "c");
-    assert!(
-        !short.status.success(),
-        "an abbreviated head is not a commit id"
-    );
-}
-
-#[test]
-fn the_head_may_not_edit_the_policy_that_judges_it() {
-    let dir = temp_dir();
-    let candidate = dir.path().join("candidate.toml");
-    let protected = dir.path().join("protected.toml");
-    fs::write(&candidate, "minimum_score = 85\n").expect("write candidate");
-    fs::write(&protected, "minimum_score = 85\n").expect("write protected");
-    let identity = |candidate: &Path| {
+fn the_protected_clone_must_serve_the_baseline_on_main() {
+    let forge = Forge::new();
+    let work = temp_dir();
+    let clone = |commit: &str, name: &str| {
         run_guard(
             None,
             &format!(
-                "proof_baseline_require_policy_identity {} {}",
-                path_arg(candidate),
-                path_arg(&protected)
+                "proof_baseline_clone {:?} {} {commit:?}",
+                forge.url(),
+                path_arg(&work.path().join(name))
             ),
         )
     };
-    assert!(
-        identity(&candidate).status.success(),
-        "the same policy judges both sides"
+    let ok = clone(&forge.fork, "a");
+    assert!(ok.status.success(), "{}", stderr(&ok));
+    assert_eq!(String::from_utf8_lossy(&ok.stdout).trim(), forge.fork);
+    assert_eq!(
+        git(&work.path().join("a"), &["rev-parse", "HEAD"]),
+        forge.fork
     );
 
-    fs::write(&candidate, "minimum_score = 10\n").expect("rewrite candidate");
+    let off_main = clone(&forge.topic_tip, "b");
     assert!(
-        !identity(&candidate).status.success(),
-        "a head that lowers the floor must not be judged by its own policy"
+        !off_main.status.success(),
+        "a commit the forge does not serve on main is not protected main"
+    );
+    assert!(stderr(&off_main).contains("not in the history the forge serves"));
+
+    let short = clone(&forge.fork[..7], "c");
+    assert!(
+        !short.status.success(),
+        "an abbreviated id is not a commit id"
+    );
+}
+
+#[test]
+fn protected_mains_policy_judges_the_head_and_the_head_may_edit_its_own() {
+    let dir = temp_dir();
+    let main = dir.path().join("main");
+    fs::create_dir_all(main.join("agent")).expect("agent dir");
+    fs::write(main.join("agent/audit-policy.toml"), "minimum_score = 85\n").expect("policy");
+    let out = run_guard(None, &format!("proof_baseline_policy {}", path_arg(&main)));
+    assert!(out.status.success(), "{}", stderr(&out));
+    assert_eq!(
+        String::from_utf8_lossy(&out.stdout).trim(),
+        main.join("agent/audit-policy.toml").display().to_string()
     );
 
+    let missing = run_guard(
+        None,
+        &format!(
+            "proof_baseline_policy {}",
+            path_arg(&dir.path().join("none"))
+        ),
+    );
+    assert!(!missing.status.success(), "a missing policy fails closed");
+
+    let linked = dir.path().join("linked");
+    fs::create_dir_all(linked.join("agent")).expect("agent dir");
+    std::os::unix::fs::symlink(
+        main.join("agent/audit-policy.toml"),
+        linked.join("agent/audit-policy.toml"),
+    )
+    .expect("symlink");
+    let symlink = run_guard(
+        None,
+        &format!("proof_baseline_policy {}", path_arg(&linked)),
+    );
+    assert!(!symlink.status.success(), "a symlinked policy fails closed");
+
+    // Both audits read protected main's policy; the head's own file never
+    // judges the ratchet, and a head that edits it is not refused for that.
+    let lane = lane_source();
+    assert!(lane.contains("policy=\"$(proof_baseline_policy \"$baseline_root\")\""));
+    assert!(lane.contains("--policy \"$policy\""));
+    assert!(lane.contains("proof_baseline_judged_commit \"$head_commit\" \"$policy\""));
+    assert!(lane.contains("--policy \"${judged_args[0]}/agent/audit-policy.toml\""));
     assert!(
-        !identity(&dir.path().join("absent.toml")).status.success(),
-        "a missing policy fails closed"
+        !lane.contains("--policy agent/audit-policy.toml"),
+        "the head's own policy file must not judge the ratchet"
+    );
+    assert!(
+        !lane.contains("require_policy_identity"),
+        "a policy edit is not refused outright"
+    );
+}
+
+#[test]
+fn a_head_that_edits_the_policy_is_judged_as_its_tree_under_mains_policy() {
+    let forge = Forge::new();
+    let work = temp_dir();
+    let checkout = forge.shallow_checkout(work.path(), "topic");
+    git(&checkout, &["fetch", "--quiet", "--unshallow", "origin"]);
+    let main_policy = work.path().join("main-policy.toml");
+    fs::write(&main_policy, "minimum_score = 85\n").expect("main policy");
+    let judged = |name: &str| {
+        run_guard(
+            None,
+            &format!(
+                "cd {} && proof_baseline_judged_commit \"$(git rev-parse HEAD)\" {} {}",
+                path_arg(&checkout),
+                path_arg(&main_policy),
+                path_arg(&work.path().join(name))
+            ),
+        )
+    };
+
+    let same = judged("same");
+    assert!(same.status.success(), "{}", stderr(&same));
+    assert_eq!(
+        String::from_utf8_lossy(&same.stdout).trim(),
+        forge.topic_tip,
+        "a head carrying main's policy is judged as it stands"
+    );
+
+    // The head lowers the floor. It is still judged, on its own code, under
+    // the policy main has.
+    fs::write(
+        checkout.join("agent/audit-policy.toml"),
+        "minimum_score = 10\n",
+    )
+    .expect("edit policy");
+    git(&checkout, &["add", "agent/audit-policy.toml"]);
+    git(
+        &checkout,
+        &[
+            "commit",
+            "--quiet",
+            "--no-gpg-sign",
+            "-m",
+            "lower the floor",
+        ],
+    );
+    let head = git(&checkout, &["rev-parse", "HEAD"]);
+    let edited = judged("edited");
+    assert!(edited.status.success(), "{}", stderr(&edited));
+    let scratch = String::from_utf8_lossy(&edited.stdout).trim().to_string();
+    assert_ne!(scratch, head);
+    let dir = work.path().join("edited");
+    assert_eq!(git(&dir, &["rev-parse", "HEAD^"]), head);
+    assert_eq!(
+        git(&dir, &["diff", "--name-only", &head, &scratch]),
+        "agent/audit-policy.toml"
+    );
+    assert_eq!(
+        fs::read_to_string(dir.join("agent/audit-policy.toml")).expect("judged policy"),
+        "minimum_score = 85\n",
+        "the judged tree carries protected main's policy"
     );
 }
 
@@ -287,12 +500,9 @@ fn the_lane_keeps_no_baseline_and_no_result_it_did_not_produce() {
         lane.contains("proof_baseline_clone"),
         "the baseline comes from the forge's copy of protected main"
     );
-    assert!(
-        lane.contains("proof_baseline_require_policy_identity"),
-        "the lane checks that main's policy judges this head"
-    );
-    // Every write into target/ is a tool's own output or the summary of this
-    // run; a `printf > target/...` fallback would be a result nobody produced.
+    // Every `>` write into target/ is a tool's own output or the summary of
+    // this run; a `printf > target/...` fallback would be a result nobody
+    // produced.
     for line in lane.lines() {
         let line = line.trim();
         if line.starts_with('#') || !line.contains("> target/") {
@@ -307,22 +517,15 @@ fn the_lane_keeps_no_baseline_and_no_result_it_did_not_produce() {
         lane.contains("migration-report.json") && lane.contains("liability_score <= $baseline"),
         "the migration analysis result is gated, not merely written"
     );
-    // The only commands the lane names without running are the two whose runner
-    // needs the jankurai crate in this workspace. Anything else named for the
-    // adoption detector and not run would be evidence of a tool that never ran.
-    let catalog: Vec<&str> = lane
-        .lines()
-        .map(str::trim_end)
-        .filter(|line| line.starts_with("#   "))
-        .collect();
-    assert_eq!(
-        catalog,
-        vec![
-            "#   cargo run -p jankurai -- copy-code . --json target/jankurai/copy-code.json --md target/jankurai/copy-code.md",
-            "#   cargo test -p jankurai --test language_bad_behavior",
-        ],
-        "the lane names a command for adoption detection that it does not run"
-    );
+    // No command is planted in a comment for the adoption detector to find.
+    for line in lane.lines().map(str::trim) {
+        if line.starts_with('#') {
+            assert!(
+                !line.contains("cargo run -p jankurai") && !line.contains("cargo test -p jankurai"),
+                "the lane names a command it does not run: {line}"
+            );
+        }
+    }
     assert!(
         lane.contains("needs a clean checkout"),
         "the lane refuses a tree that is not the head it reports on"
@@ -330,23 +533,53 @@ fn the_lane_keeps_no_baseline_and_no_result_it_did_not_produce() {
 }
 
 #[test]
-fn the_required_gate_runs_the_lane() {
-    let pr_ci = fs::read_to_string(repo_root().join("ops/ci/pr-ci.sh")).expect("pr-ci.sh");
+fn the_security_run_requires_every_scanner_and_reads_every_check() {
+    let lane = lane_source();
+    assert!(
+        lane.contains("JERYU_REQUIRE_SECURITY_TOOLS=1 jankurai security run"),
+        "a missing scanner must fail the security run, not be recorded as not_run"
+    );
+    assert!(
+        lane.contains("--out target/jankurai/security-wrapper.json"),
+        "the wrapper receipt has its own path"
+    );
+    assert!(
+        !lane.contains("--out target/jankurai/security/evidence.json"),
+        "the wrapper must not overwrite the script's own evidence"
+    );
+    assert!(
+        lane.contains("select(.status != \"pass\")")
+            && lane.contains("\"dependency-audit\", \"secret-scan\""),
+        "every check the security script recorded is read, scanners included"
+    );
+}
+
+#[test]
+fn the_required_gate_runs_the_lane_and_its_tests() {
+    let root = repo_root();
+    let pr_ci = fs::read_to_string(root.join("ops/ci/pr-ci.sh")).expect("pr-ci.sh");
     assert!(
         pr_ci
             .lines()
             .any(|line| line.trim() == "bash ops/ci/proof_evidence.sh"),
         "ops/ci/pr-ci.sh must run the evidence lane unconditionally"
     );
-    let workflow =
-        fs::read_to_string(repo_root().join(".github/workflows/ci.yml")).expect("ci.yml");
+    let workflow = fs::read_to_string(root.join(".github/workflows/ci.yml")).expect("ci.yml");
     assert!(
         workflow.contains("bash ops/ci/proof_evidence.sh"),
         "the mirrored workflow runs the same lane"
     );
-    let lanes = fs::read_to_string(repo_root().join("agent/proof-lanes.toml")).expect("lanes");
+    let lanes = fs::read_to_string(root.join("agent/proof-lanes.toml")).expect("lanes");
     assert!(
-        lanes.contains("[lanes.proof-evidence]") && lanes.contains("bash ops/ci/proof_evidence.sh"),
-        "the lane is declared in proof-lanes.toml"
+        lanes.contains("[lanes.proof-evidence]")
+            && lanes.contains("required = [\"just proof-evidence\"]"),
+        "the lane is declared in proof-lanes.toml as a just recipe, like every other lane"
+    );
+    let justfile = fs::read_to_string(root.join("Justfile")).expect("Justfile");
+    assert!(justfile.contains("proof-evidence:\n  bash ops/ci/proof_evidence.sh"));
+    let check = fs::read_to_string(root.join("ops/ci/check.sh")).expect("check.sh");
+    assert!(
+        check.contains("cargo test -p jeryu-jira --test proof_evidence_lane"),
+        "the gate runs this test target"
     );
 }

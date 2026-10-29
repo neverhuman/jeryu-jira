@@ -32,6 +32,9 @@ release-readiness:
 artifact-support:
   ./ops/ci/artifact_support.sh
 
+proof-evidence:
+  bash ops/ci/proof_evidence.sh
+
 doctor:
   ./scripts/ci-doctor.sh
 
