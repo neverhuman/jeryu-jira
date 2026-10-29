@@ -5,16 +5,17 @@
 # forge serves for `main`, so the baseline a head is judged against stays out of
 # that head's reach.
 #
-# The baseline commit is protected main's tip as the forge serves it at gate
-# time, and the head has to contain it. Anything older (the head's fork point,
-# say) is a baseline the head picks by choosing where it branched, so a branch
-# forked from an old main could be ratcheted against old main's score and old
-# main's policy. A head behind the tip is refused with a request to rebase;
-# the forge's merge queue replays a head onto the tip anyway (jeryu-deploy
-# crates/jeryu-api/src/web/merge_queue/, gated as refs/queue/<base>/<n> per
-# jeryu-ci-runner ops/pr-gate/README.md), so the queue's run judges the same
-# baseline this lane does. jeryu-ci-runner ops/ci/proof_evidence.sh holds its
-# heads to the same rule.
+# The ratchet baseline is protected main's tip as the forge serves it at gate
+# time: the tip's audit, under the tip's agent/audit-policy.toml. Never the
+# head's fork point, which a head picks by choosing where it branched (an old
+# main's score and old main's policy). What the head changed is still measured
+# from its fork point (the merge-base of head and tip), so a head behind the tip
+# is not blamed or credited for main's later commits and is not refused for
+# being behind: another pull request landing does not turn it red by itself.
+# Its score is compared with the tip's, and the forge's merge queue replays it
+# onto the tip and gates that replay (jeryu-deploy
+# crates/jeryu-api/src/web/merge_queue/, refs/queue/<base>/<n> per
+# jeryu-ci-runner ops/pr-gate/README.md) before anything lands.
 #
 # The lane needs the forge: it fetches and clones protected main over the
 # network. A baseline the head cannot write has to come from there, and it is
@@ -102,10 +103,10 @@ proof_baseline_fetch_main() {
   printf '%s\n' "$tip"
 }
 
-# Protected main's tip, once the head is shown to contain it: the baseline the
-# head is ratcheted against. A head sharing no history with main, or one behind
-# the tip, is refused. Prints the tip.
-proof_baseline_require_tip() {
+# The head's fork point on protected main: the newest commit of main's history
+# that the head contains, which is where its change set starts. A head sharing
+# no history with main is refused.
+proof_baseline_fork_point() {
   local tip="$1" head="$2" base
   if [[ ! "$tip" =~ ^[0-9a-f]{40}$ ]]; then
     printf 'protected-main tip is not a commit id: %s\n' "$tip" >&2
@@ -120,17 +121,12 @@ proof_baseline_require_tip() {
     printf 'the head under test shares no history with protected main %s\n' "$tip" >&2
     return 1
   fi
-  if [[ "$base" != "$tip" ]]; then
-    printf 'the head under test is behind protected main %s (it forked at %s): rebase it onto main\n' \
-      "$tip" "$base" >&2
-    return 1
-  fi
-  printf '%s\n' "$tip"
+  printf '%s\n' "$base"
 }
 
 # Clone protected main from the forge into DIR, require COMMIT to be in the
 # history the forge serves for main, and check COMMIT out there. --no-local and
-# --no-hardlinks so no object is shared with anything on this host. The tip is
+# --no-hardlinks so no object is shared with anything on this host. The commit is
 # found in this checkout; this clone is the forge's independent word
 # that it is a commit of protected main.
 proof_baseline_clone() {
@@ -183,9 +179,12 @@ proof_baseline_policy() {
 # the floor, adding an exclusion) is not refused for it: it is judged as a
 # scratch commit in DIR that is the head's tree with protected main's policy
 # put back, and this prints that commit. The scratch commit's only difference
-# from the head is that one file, which is checked here, so the head is scored
-# on its own code under rules it did not write; its edit takes effect for the
-# heads after it lands.
+# from the head is that one file, which is checked here, so the head's score
+# floor, caps and exclusions are main's, not ones it wrote; its edit takes
+# effect for the heads after it lands. Only the policy file is put back: the
+# other agent/ metadata the auditor reads (owner, test and generated-zone maps,
+# proof lanes, boundaries, the standard) is read from the head, as it is for
+# every audit of this repository.
 proof_baseline_judged_commit() {
   local head="$1" policy="$2" dir="$3" scratch diff
   if [[ ! "$head" =~ ^[0-9a-f]{40}$ ]]; then

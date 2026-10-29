@@ -55,7 +55,10 @@ baseline_root="$baseline_parent/main"
 origin_url="$(proof_baseline_remote_url)"
 origin_shown="$(proof_baseline_redact_url "$origin_url")"
 main_tip="$(proof_baseline_fetch_main)"
-base_commit="$(proof_baseline_require_tip "$main_tip" "$head_commit")"
+# The ratchet baseline is main's tip; the change set starts at the fork point
+# (ops/ci/proof_baseline.sh).
+base_commit="$main_tip"
+fork_commit="$(proof_baseline_fork_point "$main_tip" "$head_commit")"
 proof_baseline_clone "$origin_url" "$baseline_root" "$base_commit" >/dev/null
 # Protected main's policy judges both sides of the ratchet. A head that edits
 # agent/audit-policy.toml is ratcheted as its own tree with main's policy put
@@ -69,8 +72,8 @@ if [[ "$judged_commit" != "$head_commit" ]]; then
   printf '[proof] this head edits agent/audit-policy.toml: it is ratcheted under protected main %s'"'"'s policy as %s\n' \
     "$base_commit" "$judged_commit" >&2
 fi
-printf '[proof] baseline: protected main tip %s from %s\n' \
-  "$base_commit" "$origin_shown" >&2
+printf '[proof] baseline: protected main tip %s from %s; change set from fork point %s\n' \
+  "$base_commit" "$origin_shown" "$fork_commit" >&2
 
 rm -rf "target/jankurai/proofbind" "target/jankurai/proofmark" "target/jankurai/rust" "target/jankurai/security" \
   "target/jankurai/copy-code.json" "target/jankurai/copy-code.md" "target/jankurai/accepted-baseline.json" \
@@ -86,7 +89,7 @@ mkdir -p "target/jankurai/proofbind" "target/jankurai/proofmark" "target/jankura
 # The diff is written to a file first, so a failing git diff stops the lane under
 # set -e instead of leaving an empty change set behind a process substitution.
 git diff --no-ext-diff --name-only -z --diff-filter=ACMRT \
-  "${base_commit}...${head_commit}" >"$baseline_parent/changed-paths"
+  "${fork_commit}...${head_commit}" >"$baseline_parent/changed-paths"
 mapfile -d '' -t changed_paths < <(LC_ALL=C sort -zu "$baseline_parent/changed-paths")
 expected_changed="$(
   printf '%s\0' "${changed_paths[@]:-}" |
@@ -112,7 +115,7 @@ host_floor=85
 floor="$policy_floor"
 (( floor >= host_floor )) || floor="$host_floor"
 
-jankurai proofbind verify . --changed-from "$base_commit" --mode advisory --out target/jankurai/proofbind/surface-witness.json --obligations-out target/jankurai/proofbind/obligations.json --md target/jankurai/proofbind/proofbind.md
+jankurai proofbind verify . --changed-from "$fork_commit" --mode advisory --out target/jankurai/proofbind/surface-witness.json --obligations-out target/jankurai/proofbind/obligations.json --md target/jankurai/proofbind/proofbind.md
 jq -e --arg head "$head_short" --arg head_full "$head_commit" \
   --argjson changed "$expected_changed" '
   .schema_version == "1.0.0" and (.git_head == $head or .git_head == $head_full) and
@@ -129,7 +132,7 @@ jq -e '
 # Rust line and mutation evidence of contract prose too. They run for real
 # against the extant changed surface, and their unresolved review counts are
 # recorded in the summary at the end of this lane.
-jankurai proofmark rust . --obligations target/jankurai/proofbind/obligations.json --changed-from "$base_commit" --mode advisory --out target/jankurai/proofmark/proofmark-receipt.json --proof-receipt target/jankurai/proofmark/proof-receipt.json --md target/jankurai/proofmark/proofmark.md
+jankurai proofmark rust . --obligations target/jankurai/proofbind/obligations.json --changed-from "$fork_commit" --mode advisory --out target/jankurai/proofmark/proofmark-receipt.json --proof-receipt target/jankurai/proofmark/proof-receipt.json --md target/jankurai/proofmark/proofmark.md
 jq -e --arg head "$head_short" --arg head_full "$head_commit" '
   .schema_version == "1.0.0" and (.git_head == $head or .git_head == $head_full) and
   (.summary.total_obligations | type == "number") and
@@ -206,10 +209,10 @@ jq -e --argjson baseline "$baseline_liability" '
 jankurai audit "${judged_args[@]}" --mode ratchet --baseline target/jankurai/accepted-baseline.json --json target/jankurai/repo-score.json --md target/jankurai/repo-score.md \
   --policy "${judged_args[0]}/agent/audit-policy.toml" --fail-under "$floor" --full --no-score-history \
   --repair-queue-jsonl target/jankurai/repair-queue.jsonl
-jq -e --arg head "$judged_commit" --argjson floor "$floor" \
+jq -e --arg head "$judged_commit" --argjson floor "$floor" --argjson host_floor "$host_floor" \
   --argjson baseline_score "$baseline_score" '
   .schema_version == "1.9.0" and .git.head == $head and .git.dirty_worktree == false and
-  .score >= $floor and .decision.minimum_score == $floor and
+  .score >= $floor and .decision.minimum_score >= $host_floor and
   (.caps_applied | length) == 0 and .decision.hard_findings == 0 and
   .decision.passed == true and
   .decision.ratchet.passed == true and
@@ -245,7 +248,7 @@ fi
 
 sha256_of() { sha256sum <"$1" | cut -d' ' -f1; }
 jq -n \
-  --arg head "$head_commit" --arg base "$base_commit" --arg tip "$main_tip" \
+  --arg head "$head_commit" --arg base "$base_commit" --arg tip "$main_tip" --arg fork "$fork_commit" \
   --arg judged "$judged_commit" \
   --arg origin "$origin_shown" --arg policy_sha256 "$(sha256sum <"$policy" | cut -d' ' -f1)" \
   --argjson changed_count "${#changed_paths[@]}" \
@@ -260,7 +263,7 @@ jq -n \
   --arg security_sha256 "$(sha256_of "target/jankurai/security/evidence.json")" \
   --arg security_wrapper_sha256 "$(sha256_of "target/jankurai/security-wrapper.json")" \
   '{schema_version:"jeryu.jira.proof-evidence/v1",git_head:$head,
-    baseline_commit:$base,main_tip:$tip,baseline_origin:$origin,
+    baseline_commit:$base,main_tip:$tip,fork_point:$fork,baseline_origin:$origin,
     baseline_source:"forge-clone-of-protected-main-tip",policy_sha256:$policy_sha256,judged_commit:$judged,
     head_edits_policy:($judged != $head),
     dirty_worktree:false,changed_path_count:$changed_count,

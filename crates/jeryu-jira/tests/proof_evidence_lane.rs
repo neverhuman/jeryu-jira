@@ -281,7 +281,7 @@ fn a_depth_one_pull_request_checkout_is_deepened_with_the_heads_own_history() {
     let out = run_guard(
         None,
         &format!(
-            "cd {} && tip=\"$(proof_baseline_fetch_main)\" && printf '%s\\n' \"$tip\" && proof_baseline_require_tip \"$tip\" HEAD",
+            "cd {} && tip=\"$(proof_baseline_fetch_main)\" && printf '%s\\n' \"$tip\" && proof_baseline_fork_point \"$tip\" HEAD",
             path_arg(&checkout)
         ),
     );
@@ -299,32 +299,37 @@ fn a_depth_one_pull_request_checkout_is_deepened_with_the_heads_own_history() {
     assert_eq!(git(&checkout, &["rev-parse", "HEAD"]), forge.current_tip);
 }
 
-/// The baseline is main's tip, never an older commit the head picked by where
-/// it branched: a head behind the tip is refused and asked to rebase.
+/// A head behind main's tip is not refused for it: its change set starts at
+/// its fork point, so another pull request landing does not turn it red, and
+/// the lane ratchets it against the tip itself, never against that fork point.
 #[test]
-fn a_head_behind_protected_mains_tip_is_refused_so_the_baseline_is_always_the_tip() {
+fn a_head_behind_the_tip_is_measured_from_its_fork_point_and_ratcheted_against_the_tip() {
     let forge = Forge::new();
     let work = temp_dir();
     let checkout = forge.shallow_checkout(work.path(), "topic");
     let out = run_guard(
         None,
         &format!(
-            "cd {} && tip=\"$(proof_baseline_fetch_main)\" && proof_baseline_require_tip \"$tip\" HEAD",
+            "cd {} && tip=\"$(proof_baseline_fetch_main)\" && proof_baseline_fork_point \"$tip\" HEAD",
             path_arg(&checkout)
         ),
     );
+    assert!(out.status.success(), "{}", stderr(&out));
     assert_ne!(forge.fork, forge.main_tip, "main has moved past the fork");
+    assert_eq!(String::from_utf8_lossy(&out.stdout).trim(), forge.fork);
+
+    // Line tripwires over the lane: the clone and audit are of the tip, the
+    // change set and the proof tools start at the fork point.
+    let lane = lane_source();
     assert!(
-        !out.status.success(),
-        "a head behind main's tip must fail the lane"
+        lane.contains("base_commit=\"$main_tip\""),
+        "the baseline is main's tip"
     );
-    let err = stderr(&out);
-    assert!(err.contains("is behind protected main"), "{err}");
     assert!(
-        err.contains(&forge.main_tip) && err.contains(&forge.fork),
-        "{err}"
+        lane.contains("proof_baseline_clone \"$origin_url\" \"$baseline_root\" \"$base_commit\"")
     );
-    assert!(err.contains("rebase it onto main"), "{err}");
+    assert!(lane.contains("\"${fork_commit}...${head_commit}\""));
+    assert!(!lane.contains("--changed-from \"$base_commit\""));
 }
 
 #[test]
@@ -335,7 +340,7 @@ fn a_head_sharing_no_history_with_protected_main_is_refused() {
     let out = run_guard(
         None,
         &format!(
-            "cd {} && tip=\"$(proof_baseline_fetch_main)\" && proof_baseline_require_tip \"$tip\" HEAD",
+            "cd {} && tip=\"$(proof_baseline_fetch_main)\" && proof_baseline_fork_point \"$tip\" HEAD",
             path_arg(&checkout)
         ),
     );
@@ -347,7 +352,7 @@ fn a_head_sharing_no_history_with_protected_main_is_refused() {
 
     // A commit id is all the guard will pass to git: no ref name, no option.
     for bad in ["--upload-pack=touch /tmp/x", "origin/main", "1111111"] {
-        let out = run_guard(None, &format!("proof_baseline_require_tip {bad:?} HEAD"));
+        let out = run_guard(None, &format!("proof_baseline_fork_point {bad:?} HEAD"));
         assert!(!out.status.success(), "{bad} is not a commit id");
     }
 }
