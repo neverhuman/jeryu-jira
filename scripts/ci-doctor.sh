@@ -28,6 +28,14 @@ require_tool cargo
 require_tool git
 require_tool just
 require_tool python3
+# The merge-blocking proof-evidence lane (ops/ci/proof_evidence.sh) refuses to
+# run without these, so a gate host that lacks one is reported here, before a
+# full gate run, as a host-provisioning error rather than a red required check.
+require_tool jq
+require_tool sha256sum
+require_tool gitleaks
+require_tool cargo-audit
+require_tool actionlint
 
 if command -v jankurai >/dev/null 2>&1; then
   actual="$(jankurai --version 2>/dev/null || true)"

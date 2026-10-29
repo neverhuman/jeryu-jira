@@ -112,6 +112,10 @@ policy_floor="$(jq -er '.decision.minimum_score' "target/jankurai/accepted-basel
 # (jeryu-deploy ci_bridge::HOST_JANKURAI_MINIMUM_SCORE); a policy may raise it,
 # never lower it.
 host_floor=85
+if [[ ! "$policy_floor" =~ ^[0-9]+$ ]]; then
+  printf 'protected main policy minimum_score is not a whole number: %s\n' "$policy_floor" >&2
+  exit 1
+fi
 floor="$policy_floor"
 (( floor >= host_floor )) || floor="$host_floor"
 
@@ -209,10 +213,10 @@ jq -e --argjson baseline "$baseline_liability" '
 jankurai audit "${judged_args[@]}" --mode ratchet --baseline target/jankurai/accepted-baseline.json --json target/jankurai/repo-score.json --md target/jankurai/repo-score.md \
   --policy "${judged_args[0]}/agent/audit-policy.toml" --fail-under "$floor" --full --no-score-history \
   --repair-queue-jsonl target/jankurai/repair-queue.jsonl
-jq -e --arg head "$judged_commit" --argjson floor "$floor" --argjson host_floor "$host_floor" \
+jq -e --arg head "$judged_commit" --argjson floor "$floor" --argjson policy_floor "$policy_floor" \
   --argjson baseline_score "$baseline_score" '
   .schema_version == "1.9.0" and .git.head == $head and .git.dirty_worktree == false and
-  .score >= $floor and .decision.minimum_score >= $host_floor and
+  .score >= $floor and .decision.minimum_score == $policy_floor and
   (.caps_applied | length) == 0 and .decision.hard_findings == 0 and
   .decision.passed == true and
   .decision.ratchet.passed == true and
@@ -225,14 +229,16 @@ jq -e --arg head "$judged_commit" --argjson floor "$floor" --argjson host_floor 
 
 # A head that edits the policy must also pass under its own: no caps, no hard
 # findings, the forge's floor (which a policy cannot lower), and the head's own
-# minimum_score, so a head cannot land a floor that it does not itself meet.
+# minimum_score, so a head cannot land a floor that it does not itself meet,
+# nor a policy whose minimum_score is below the forge's floor.
 if [[ "$judged_commit" != "$head_commit" ]]; then
   jankurai audit . --mode advisory --policy ./agent/audit-policy.toml --full --no-score-history \
     --json target/jankurai/head-policy-score.json --md target/jankurai/head-policy-score.md
   jq -e --arg head "$head_commit" --argjson host_floor "$host_floor" '
     .schema_version == "1.9.0" and .git.head == $head and .git.dirty_worktree == false and
     .score >= $host_floor and (.caps_applied | length) == 0 and .decision.hard_findings == 0 and
-    .decision.passed == true and .score >= .decision.minimum_score
+    .decision.passed == true and .score >= .decision.minimum_score and
+    .decision.minimum_score >= $host_floor
   ' "target/jankurai/head-policy-score.json" >/dev/null ||
     { printf 'this head does not pass under its own edited policy\n' >&2; exit 1; }
 fi
