@@ -30,7 +30,7 @@ require_tool sha256sum
 require_jankurai
 
 # Every claim below names this head, so the tree has to be this head.
-if [[ -n "$(git status --porcelain=v1 --untracked-files=no)" ]]; then
+if [[ -n "$(git status --porcelain=v1 --untracked-files=all)" ]]; then
   printf 'proof evidence needs a clean checkout: commit or stash first\n' >&2
   exit 1
 fi
@@ -95,7 +95,7 @@ expected_changed="$(
 
 # The audit of protected main. --read-only keeps the audit out of the clone and
 # writes the report here, under this run's own output directory.
-jankurai audit "$baseline_root" --mode advisory --full --no-score-history \
+jankurai audit "$baseline_root" --mode advisory --full --no-score-history --read-only \
   --policy "$policy" \
   --json "target/jankurai/accepted-baseline.json" --md "target/jankurai/accepted-baseline.md"
 jq -e --arg base "$base_commit" '
@@ -221,13 +221,15 @@ jq -e --arg head "$judged_commit" --argjson floor "$floor" \
 ' "target/jankurai/repo-score.json" >/dev/null
 
 # A head that edits the policy must also pass under its own: no caps, no hard
-# findings, and the forge's floor, which a policy cannot lower.
+# findings, the forge's floor (which a policy cannot lower), and the head's own
+# minimum_score, so a head cannot land a floor that it does not itself meet.
 if [[ "$judged_commit" != "$head_commit" ]]; then
   jankurai audit . --mode advisory --policy ./agent/audit-policy.toml --full --no-score-history \
     --json target/jankurai/head-policy-score.json --md target/jankurai/head-policy-score.md
   jq -e --arg head "$head_commit" --argjson host_floor "$host_floor" '
     .schema_version == "1.9.0" and .git.head == $head and .git.dirty_worktree == false and
-    .score >= $host_floor and (.caps_applied | length) == 0 and .decision.hard_findings == 0
+    .score >= $host_floor and (.caps_applied | length) == 0 and .decision.hard_findings == 0 and
+    .decision.passed == true and .score >= .decision.minimum_score
   ' "target/jankurai/head-policy-score.json" >/dev/null ||
     { printf 'this head does not pass under its own edited policy\n' >&2; exit 1; }
 fi
@@ -236,7 +238,7 @@ fi
 # baseline came from.
 if [[ "$(git rev-parse --verify 'HEAD^{commit}')" != "$head_commit" ||
       "$(git remote get-url origin)" != "$origin_url" ||
-      -n "$(git status --porcelain=v1 --untracked-files=no)" ]]; then
+      -n "$(git status --porcelain=v1 --untracked-files=all)" ]]; then
   printf 'the proof commands moved the head, the tracked tree or the origin remote\n' >&2
   exit 1
 fi

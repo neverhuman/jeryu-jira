@@ -12,7 +12,12 @@
 # pass to fail when main advances, and an open pull request is not forced to
 # rebase on every push to main. Main's later commits are still judged against:
 # the forge's merge queue replays a head onto main's current tip and runs the
-# required gate on that replay, where the fork point is the tip.
+# required gate on that replay, where the fork point is the tip. (The queue
+# builds the replay in jeryu-deploy crates/jeryu-api/src/web/merge_queue/;
+# the gate runner gates that queue commit, refs/queue/<base>/<n>, as described
+# in jeryu-ci-runner ops/pr-gate/README.md.) A branch forked from an old main
+# is therefore compared with that old main here, and with current main only
+# when it is queued.
 #
 # The lane needs the forge: it fetches and clones protected main over the
 # network. A baseline the head cannot write has to come from there, and it is
@@ -184,6 +189,15 @@ proof_baseline_judged_commit() {
     printf 'head under test is not a commit id: %s\n' "$head" >&2
     return 1
   fi
+  # The head's tree is untrusted: agent/ must be a directory and the policy a
+  # regular file in it, never a symlink or submodule, before anything is read
+  # from or written to those paths. (A symlinked policy would otherwise make
+  # the copy below write through it to a path outside the scratch tree.)
+  if [[ "$(git ls-tree "$head" -- agent | cut -f1 | cut -d' ' -f1,2)" != "040000 tree" ||
+        ! "$(git ls-tree "$head" -- agent/audit-policy.toml | cut -f1 | cut -d' ' -f1,2)" =~ ^100(644|755)\ blob$ ]]; then
+    printf 'the head'"'"'s agent/audit-policy.toml must be a regular file in an agent/ directory\n' >&2
+    return 1
+  fi
   if cmp -s <(git show "${head}:agent/audit-policy.toml" 2>/dev/null) "$policy"; then
     printf '%s\n' "$head"
     return 0
@@ -194,7 +208,12 @@ proof_baseline_judged_commit() {
     printf 'cannot stage the head under protected main'"'"'s policy\n' >&2
     return 1
   fi
-  mkdir -p "$dir/agent"
+  if [[ -L "$dir/agent" || ! -d "$dir/agent" ||
+        -L "$dir/agent/audit-policy.toml" || ! -f "$dir/agent/audit-policy.toml" ]]; then
+    printf 'the checked-out head has no regular agent/audit-policy.toml\n' >&2
+    return 1
+  fi
+  rm -f -- "$dir/agent/audit-policy.toml"
   cp -- "$policy" "$dir/agent/audit-policy.toml"
   if ! git -C "$dir" -c user.name=proof-evidence -c user.email=proof-evidence@invalid \
       -c commit.gpgsign=false commit --quiet --allow-empty -m 'proof evidence: protected main policy' \

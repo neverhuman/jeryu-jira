@@ -412,8 +412,16 @@ fn protected_mains_policy_judges_the_head_and_the_head_may_edit_its_own() {
     assert!(lane.contains("proof_baseline_judged_commit \"$head_commit\" \"$policy\""));
     assert!(lane.contains("--policy \"${judged_args[0]}/agent/audit-policy.toml\""));
     assert!(
+        lane.contains(".decision.passed == true and .score >= .decision.minimum_score"),
+        "a head that edits the policy must meet its own new floor"
+    );
+    // A tripwire only: in the common case the ratchet does read the head's own
+    // ./agent/audit-policy.toml, which is safe because proof_baseline_judged_commit
+    // returns the head only when that file is byte-equal to main's (tested with
+    // real git in a_head_that_edits_the_policy_is_judged_as_its_tree_under_mains_policy).
+    assert!(
         !lane.contains("--policy agent/audit-policy.toml"),
-        "the head's own policy file must not judge the ratchet"
+        "the ratchet names its policy through the judged tree, not the head's path"
     );
     assert!(
         !lane.contains("require_policy_identity"),
@@ -482,6 +490,37 @@ fn a_head_that_edits_the_policy_is_judged_as_its_tree_under_mains_policy() {
         fs::read_to_string(dir.join("agent/audit-policy.toml")).expect("judged policy"),
         "minimum_score = 85\n",
         "the judged tree carries protected main's policy"
+    );
+
+    // A head whose policy is a symlink is refused before anything is written,
+    // so the copy cannot write through it to a file outside the scratch tree.
+    let victim = work.path().join("victim");
+    fs::write(&victim, "untouched\n").expect("victim");
+    git(&checkout, &["rm", "--quiet", "agent/audit-policy.toml"]);
+    fs::create_dir_all(checkout.join("agent")).expect("agent dir");
+    std::os::unix::fs::symlink(&victim, checkout.join("agent/audit-policy.toml"))
+        .expect("symlink policy");
+    git(&checkout, &["add", "agent/audit-policy.toml"]);
+    git(
+        &checkout,
+        &[
+            "commit",
+            "--quiet",
+            "--no-gpg-sign",
+            "-m",
+            "symlink the policy",
+        ],
+    );
+    let linked = judged("linked");
+    assert!(
+        !linked.status.success(),
+        "a symlinked head policy is refused"
+    );
+    assert!(stderr(&linked).contains("must be a regular file"));
+    assert_eq!(
+        fs::read_to_string(&victim).expect("victim"),
+        "untouched\n",
+        "nothing was written through the symlink"
     );
 }
 
