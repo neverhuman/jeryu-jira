@@ -10,6 +10,10 @@ set -euo pipefail
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 cd "$repo_root"
 
+# Resolve and verify the absolute governed auditor before any lane runs.
+source ops/ci/lib.sh
+require_jankurai
+
 # Ordinary compilation -- cargo check, the lib/bin, property, migration and contract test builds --
 # builds in the gate runner's retained build cache when the gate host offers one
 # (JERYU_CI_BUILD_CACHE_DIR; jeryu-ci-runner ops/pr-gate/README.md, "Reusing ordinary compilation
